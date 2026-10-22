@@ -29,6 +29,12 @@ PUBLIC_FILES = (
 ) + tuple(f"assets/templates/{name}.png" for name in TEMPLATE_DEFINITIONS)
 
 
+class MissingPublicFileError(FileNotFoundError):
+    def __init__(self, public_file):
+        self.public_file = public_file
+        super().__init__(f"缺少发布文件：{public_file}")
+
+
 def source_payloads(root=ROOT):
     root = Path(root)
     payloads = {}
@@ -37,7 +43,7 @@ def source_payloads(root=ROOT):
         if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
             raise ValueError(f"发布文件不能是符号链接或越界路径：{name}")
         if not path.is_file():
-            raise FileNotFoundError(f"缺少发布文件：{name}")
+            raise MissingPublicFileError(name)
         payloads[name] = path.read_bytes()
     example = json.loads(payloads["config.example.json"].decode("utf-8"))
     validate_config(example)

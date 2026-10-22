@@ -13,11 +13,11 @@ import zipfile
 import cv2
 import numpy as np
 from . import __version__
-from .packaging import source_payloads
+from .packaging import PUBLIC_FILES, MissingPublicFileError, source_payloads
 from .config import ROOT
 from .jsonio import dumps
 
-CONFIG_KEYS = ("timing_mode", "adaptive_latency", "calibrate_speed", "speed_fraction_per_s", "contact_overlap_ratio", "capture_every_n_frames", "input_latency_ms",
+CONFIG_KEYS = ("timing_mode", "input_method", "click_hold_ms", "click_jitter_ratio", "adaptive_latency", "calibrate_speed", "speed_fraction_per_s", "contact_overlap_ratio", "capture_every_n_frames", "input_latency_ms",
                "key_hold_ms", "continuous_fishing", "dry_run", "show_preview", "template_threshold",
                "min_action_interval_s", "unknown_timeout_s", "timing_timeout_s", "toggle_hotkey", "pause_hotkey", "snapshot_hotkey")
 GUIDE = """# 比例速度与入条判定诊断数据
@@ -58,6 +58,7 @@ class TrialRecorder:
         self.workers = []
         self.last_bundle = None
         self.last_error = None
+        self.last_error_info = None
 
     def start(self, cfg):
         if self.current is not None:
@@ -254,6 +255,8 @@ class TrialRecorder:
         worker.start()
 
     def _export(self, directory, crops, summary):
+        temp = None
+        stage = "encode_crops"
         try:
             for seq, crop in crops.items():
                 path = directory / "crops" / f"frame_{seq:08}.png"
@@ -267,6 +270,7 @@ class TrialRecorder:
             output.parent.mkdir(parents=True, exist_ok=True)
             temp = output.with_suffix(".zip.tmp")
             checksums = []
+            stage = "write_archive"
             with zipfile.ZipFile(temp, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
                 def add(name, data):
                     archive.writestr(name, data)
@@ -277,18 +281,44 @@ class TrialRecorder:
                 for path in sorted(selected):
                     if path.is_file() and not path.is_symlink():
                         add(path.relative_to(directory).as_posix(), path.read_bytes())
-                for name, data in source_payloads().items():
+                stage = "source_payloads"
+                payloads = source_payloads()
+                stage = "write_source"
+                for name, data in payloads.items():
                     add("source/"+name, data)
                 archive.writestr("SHA256SUMS", "\n".join(checksums)+"\n")
+            stage = "verify_archive"
             with zipfile.ZipFile(temp) as archive:
                 if archive.testzip() is not None:
                     raise OSError("诊断包校验失败")
+            stage = "finalize_archive"
             temp.replace(output)
             self.last_bundle = output
+            self.last_error = self.last_error_info = None
             self.emit("diagnostic_status", f"已保存：{output.name}\n{summary}")
-        except Exception:
-            self.last_error = "测试数据打包失败，原始记录仍保留在trial_records。"
+        except Exception as exc:
+            self.last_bundle = None
+            info = {"code": "export_failed", "exception": type(exc).__name__, "stage": stage}
+            if isinstance(exc, MissingPublicFileError) and exc.public_file in PUBLIC_FILES:
+                info.update(code="missing_public_file", public_file=exc.public_file)
+            elif isinstance(exc, PermissionError):
+                info["code"] = "permission_denied"
+            elif isinstance(exc, zipfile.BadZipFile):
+                info["code"] = "invalid_archive"
+            self.last_error_info = info
+            detail = info["code"] + (": " + info["public_file"] if "public_file" in info else "")
+            self.last_error = f"测试数据打包失败（{detail}），原始记录仍保留在trial_records。"
+            try:
+                (directory / "export_error.json").write_text(dumps(info, indent=2)+"\n", encoding="utf-8")
+            except OSError:
+                pass
             self.emit("diagnostic_status", self.last_error)
+        finally:
+            if temp is not None:
+                try:
+                    temp.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def join(self):
         for worker in self.workers:

@@ -27,6 +27,7 @@ class Runtime:
         self.win, self.hwnd, self.profile, self.cfg = win, hwnd, profile, dict(cfg)
         self.input_method = cfg.get("input_method", "space")
         self.click_point_norm = tuple(cfg.get("click_point", (0.5, 0.5)))
+        self.click_jitter_ratio = cfg.get("click_jitter_ratio", .015)
         self.click_hold_ms = cfg.get("click_hold_ms", 30)
         self.capture_backend = cfg.get("capture_backend", "mss")
         self.action_word = "点击" if self.input_method == "click" else "按空格"
@@ -126,7 +127,7 @@ class Runtime:
         elif not self.win.foreground_matches(self.hwnd):
             self.pause(f"未启动：所选游戏窗口不在前台。切回游戏窗口后按{self.toggle_key}")
         else:
-            # 激活前验证窗口尺寸；实际发送空格前仍会再次检查焦点及位置。
+            # 激活前验证窗口尺寸；实际发送输入前仍会再次检查焦点及位置。
             try:
                 self.capture_box()
             except (OSError, ValueError) as exc:
@@ -169,7 +170,7 @@ class Runtime:
                         self.pause("重新等待启动", "arming")
                     self.active = False
                     self.pending_start_at = now+3
-                    self.pause_reason = f"3秒后启动，请将所选游戏窗口置前；{self.pause_key}可取消"
+                    self.pause_reason = f"3秒后启动，请将所选游戏窗口置前；{self.pause_key}／Esc可取消"
                     self.emit("notice", self.pause_reason)
                     self.publish_control()
             elif cmd == "pause":
@@ -203,7 +204,7 @@ class Runtime:
         self.recorder = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 1/capture_interval(self.cfg), (336, 598))
         if not self.recorder.isOpened():
             self.close_recording()
-            raise OSError("无法创建录像，请使用模拟器录屏并保留原视频")
+            raise OSError("无法创建录像，请使用游戏窗口录屏并保留原视频")
         self.record_meta = path.with_suffix(".csv").open("w", encoding="utf-8")
         self.record_meta.write("frame,elapsed_seconds\n")
         self.record_started = time.perf_counter()
@@ -362,6 +363,9 @@ class Runtime:
                                 # 叠加点击目标十字线，便于核对点击位置是否落在可点击区域。
                                 cx = int(round(self.click_point_norm[0]*(preview.shape[1]-1)))
                                 cy = int(round(self.click_point_norm[1]*(preview.shape[0]-1)))
+                                if self.click_jitter_ratio:
+                                    radius = max(1, round((min(preview.shape[:2])-1) * self.click_jitter_ratio))
+                                    cv2.circle(preview, (cx, cy), radius, (0, 255, 255), 1)
                                 cv2.line(preview, (cx-8, cy), (cx+8, cy), (0, 255, 255), 1)
                                 cv2.line(preview, (cx, cy-8), (cx, cy+8), (0, 255, 255), 1)
                             self.emit("frame", (preview, info))
@@ -460,7 +464,8 @@ class Runtime:
                 return skipped is None and geometry_matches
             if self.input_method == "click":
                 sent = self.win.click_at(self.hwnd, box, *self.click_point_norm,
-                                         self.click_hold_ms, self.input_cancelled, guard)
+                                         self.click_hold_ms, self.input_cancelled, guard,
+                                         jitter_ratio=self.click_jitter_ratio)
             else:
                 sent = self.win.tap_space(self.hwnd, self.cfg["key_hold_ms"], self.input_cancelled, guard)
         if self.trial:
@@ -527,4 +532,5 @@ class Runtime:
             self.external_space_down = down
 
     def input_cancelled(self):
-        return self.stop.is_set() or self.cancel_input.is_set() or self.win.key_down(self.hotkeys.pause_vk)
+        return (self.stop.is_set() or self.cancel_input.is_set()
+                or self.win.key_down(self.hotkeys.pause_vk) or self.win.key_down(0x1B))

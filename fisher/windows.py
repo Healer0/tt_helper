@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""Windows窗口坐标、前台检查和空格输入；不访问游戏进程内存。"""
+"""Windows窗口坐标、前台检查和输入；不访问游戏进程内存。"""
 import ctypes as C
 from ctypes import wintypes as T
 import sys
 import time
-from .emulators import select_windows
+import math
+import random
+from .emulators import WECHAT_PROCESSES, select_windows, title_family
 
 def enable_dpi_awareness():
     if sys.platform != "win32":
@@ -60,11 +62,38 @@ def absolute_mouse_coords(x_px, y_px, vx, vy, vw, vh):
         raise ValueError(f"点击坐标超出虚拟屏幕：({x_px}, {y_px})")
     return round((x_px - vx) * 65535 / (vw - 1)), round((y_px - vy) * 65535 / (vh - 1))
 
+
+def jittered_click_point(box, x_norm, y_norm, ratio, previous=None, rng=None):
+    """在基准点附近的圆形像素区域抽样；不越出 crop，不重复上一落点。"""
+    if (isinstance(ratio, bool) or not isinstance(ratio, (int, float))
+            or not math.isfinite(ratio) or not 0 <= ratio <= .05):
+        raise ValueError("随机偏移比例应为 0～0.05 的有限数值")
+    center = click_point(box, x_norm, y_norm)
+    if ratio == 0:
+        return center
+    radius = max(1, round(min(box["width"]-1, box["height"]-1) * ratio))
+    rng = rng or random
+    left, top = box["left"], box["top"]
+    right, bottom = left+box["width"], top+box["height"]
+    for _ in range(64):
+        dx, dy = rng.randint(-radius, radius), rng.randint(-radius, radius)
+        candidate = center[0]+dx, center[1]+dy
+        if (0 < dx*dx+dy*dy <= radius*radius and candidate != previous
+                and left <= candidate[0] < right and top <= candidate[1] < bottom):
+            return candidate
+    # 抽样次数有界，避免随机源异常影响动作期限；最小区域也有可用邻点。
+    for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1)):
+        candidate = center[0]+dx, center[1]+dy
+        if candidate != previous and left <= candidate[0] < right and top <= candidate[1] < bottom:
+            return candidate
+    return center
+
 class Windows:
     def __init__(self):
         if sys.platform != "win32":
             raise RuntimeError("自动按键和实时截图入口需要Windows；离线回放可在其他系统运行")
         self.u = C.WinDLL("user32", use_last_error=True)
+        self.u.GetForegroundWindow.argtypes = []
         self.u.GetForegroundWindow.restype = T.HWND
         self.u.GetAncestor.argtypes = [T.HWND, T.UINT]
         self.u.GetAncestor.restype = T.HWND
@@ -77,14 +106,24 @@ class Windows:
         self.u.IsIconic.argtypes = [T.HWND]
         self.u.GetAsyncKeyState.argtypes = [C.c_int]
         self.u.GetAsyncKeyState.restype = T.SHORT
-        self.u.GetSystemMetrics.argtypes = [T.c_int]
-        self.u.GetSystemMetrics.restype = T.c_int
+        self.u.GetSystemMetrics.argtypes = [C.c_int]
+        self.u.GetSystemMetrics.restype = C.c_int
         self.u.SendInput.argtypes = [T.UINT, C.POINTER(INPUT), C.c_int]
         self.u.SendInput.restype = T.UINT
         self.callback_type = C.WINFUNCTYPE(T.BOOL, T.HWND, T.LPARAM)
         self.u.EnumWindows.argtypes = [self.callback_type, T.LPARAM]
+        self.u.GetWindowThreadProcessId.argtypes = [T.HWND, C.POINTER(T.DWORD)]
+        self.u.GetWindowThreadProcessId.restype = T.DWORD
+        self.k = C.WinDLL("kernel32", use_last_error=True)
+        self.k.OpenProcess.argtypes = [T.DWORD, T.BOOL, T.DWORD]
+        self.k.OpenProcess.restype = T.HANDLE
+        self.k.QueryFullProcessImageNameW.argtypes = [T.HANDLE, T.DWORD, T.LPWSTR, C.POINTER(T.DWORD)]
+        self.k.QueryFullProcessImageNameW.restype = T.BOOL
+        self.k.CloseHandle.argtypes = [T.HANDLE]
+        self.k.CloseHandle.restype = T.BOOL
         self.owns_space = False
         self.last_click_at = None
+        self.last_click_position = None
         expected = 40 if C.sizeof(C.c_void_p) == 8 else 28
         if C.sizeof(INPUT) != expected:
             raise RuntimeError(f"Windows输入结构尺寸异常：{C.sizeof(INPUT)} / {expected}")
@@ -94,8 +133,27 @@ class Windows:
         self.u.GetWindowTextW(hwnd, buf, len(buf))
         return buf.value
 
+    def foreground_window(self):
+        return self.u.GetForegroundWindow()
+
+    def process_name(self, hwnd):
+        pid = T.DWORD()
+        self.u.GetWindowThreadProcessId(hwnd, C.byref(pid))
+        handle = self.k.OpenProcess(0x1000, False, pid.value)
+        if not handle:
+            return "?"
+        try:
+            buf = C.create_unicode_buffer(32768)
+            size = T.DWORD(len(buf))
+            if self.k.QueryFullProcessImageNameW(handle, 0, buf, C.byref(size)):
+                return buf.value.rsplit("\\", 1)[-1]
+            return "?"
+        finally:
+            self.k.CloseHandle(handle)
+
     def windows(self, emulator_type="ldplayer", include_other=False):
         found = []
+        families = {}
         @self.callback_type
         def callback(hwnd, param):
             title = self.title(hwnd)
@@ -104,16 +162,19 @@ class Windows:
                     box = self.client_box(hwnd)
                     if box[2] > 100 and box[3] > 100:
                         found.append((int(hwnd), title))
+                        if (emulator_type == "wechat" and title_family(title) != "wechat"
+                                and self.process_name(hwnd).casefold() in WECHAT_PROCESSES):
+                            families[int(hwnd)] = "wechat"
                 except OSError:
                     pass
             return True
         self.u.EnumWindows(callback, 0)
-        return select_windows(found, emulator_type, include_other)
+        return select_windows(found, emulator_type, include_other, families)
 
     def client_box(self, hwnd):
         rect, pt = T.RECT(), T.POINT(0, 0)
         if not self.u.IsWindow(hwnd) or self.u.IsIconic(hwnd):
-            raise OSError("模拟器已关闭或最小化")
+            raise OSError("目标游戏窗口已关闭或最小化")
         if not self.u.GetClientRect(hwnd, C.byref(rect)) or not self.u.ClientToScreen(hwnd, C.byref(pt)):
             raise OSError("无法取得窗口位置")
         return pt.x, pt.y, rect.right-rect.left, rect.bottom-rect.top
@@ -170,7 +231,7 @@ class Windows:
         finally:
             self.release()
 
-    def click_at(self, hwnd, box, x_norm, y_norm, hold_ms, cancelled, guard=None):
+    def click_at(self, hwnd, box, x_norm, y_norm, hold_ms, cancelled, guard=None, *, jitter_ratio=0):
         """在游戏画面内归一化位置发送一次短按点击；守卫顺序与tap_space一致。
 
         fire-and-forget：不维护owns_space，按下/抬起在同一调用内完成，
@@ -191,18 +252,23 @@ class Windows:
             return False
         down_sent = False
         try:
-            x_px, y_px = click_point(box, x_norm, y_norm)
+            x_px, y_px = jittered_click_point(box, x_norm, y_norm, jitter_ratio,
+                                             getattr(self, "last_click_position", None))
             vx, vy, vw, vh = self.virtual_screen()
             ax, ay = absolute_mouse_coords(x_px, y_px, vx, vy, vw, vh)
             move = INPUT(type=0, mi=MOUSEINPUT(ax, ay, 0, MOUSE_MOVE | MOUSE_ABSOLUTE | MOUSE_VIRTUALDESK, 0, 0))
             down = INPUT(type=0, mi=MOUSEINPUT(0, 0, 0, MOUSE_LEFTDOWN, 0, 0))
             up = INPUT(type=0, mi=MOUSEINPUT(0, 0, 0, MOUSE_LEFTUP, 0, 0))
+            # 虚拟屏幕查询也可能阻塞，坐标准备完成后再次验证期限和目标。
+            if cancelled() or not self.foreground_matches(hwnd) or (guard and not guard()):
+                return False
             self.last_send_begin = time.perf_counter()
             sent = self.u.SendInput(2, (INPUT * 2)(move, down), C.sizeof(INPUT))
             self.last_send_end = time.perf_counter()
             if sent != 2:
-                raise OSError("鼠标点击失败（移动+按下）。请确认窗口在前台、程序与微信权限一致")
+                raise OSError("鼠标点击失败（移动+按下）。请确认目标游戏在前台，且双方权限一致")
             down_sent = True
+            self.last_click_position = (x_px, y_px)
             self.last_key_down_at = (self.last_send_begin + self.last_send_end) / 2
             self.last_click_at = self.last_key_down_at
             deadline = time.perf_counter() + max(0, hold_ms) / 1000

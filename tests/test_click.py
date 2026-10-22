@@ -1,10 +1,60 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """鼠标点击注入：坐标映射纯函数与click_at守卫回归。"""
 import unittest
-from fisher.windows import Windows, click_point, absolute_mouse_coords
+import random
+from unittest.mock import Mock
+from fisher.windows import Windows, click_point, absolute_mouse_coords, jittered_click_point
 
 
 class ClickPointTests(unittest.TestCase):
+    def test_jitter_varies_inside_radius_without_repeating_previous_or_center(self):
+        box = {"left": -640, "top": 20, "width": 686, "height": 1249}
+        center = click_point(box, .5, .86)
+        radius = round(685*.015)
+        previous = None
+        points = set()
+        rng = random.Random(42)
+        for _ in range(200):
+            point = jittered_click_point(box, .5, .86, .015, previous, rng)
+            self.assertNotEqual(point, previous)
+            self.assertNotEqual(point, center)
+            self.assertLessEqual(sum((a-b)**2 for a,b in zip(point, center)), radius**2)
+            self.assertTrue(-640 <= point[0] < 46 and 20 <= point[1] < 1269)
+            points.add(point)
+            previous = point
+        self.assertGreater(len(points), 20)
+
+    def test_jitter_at_all_corners_stays_inside_even_a_tiny_crop(self):
+        for size in ((3, 3), (336, 598)):
+            box = dict(left=10, top=20, width=size[0], height=size[1])
+            for x, y in ((0,0), (0,1), (1,0), (1,1)):
+                previous = None
+                for _ in range(30):
+                    point = jittered_click_point(box, x, y, .015, previous, random.Random(_))
+                    self.assertTrue(10 <= point[0] < 10+size[0] and 20 <= point[1] < 20+size[1])
+                    self.assertNotEqual(point, previous)
+                    previous = point
+
+    def test_zero_jitter_preserves_fixed_point_without_sampling(self):
+        box = dict(left=10, top=20, width=336, height=598)
+        rng = Mock()
+        center = click_point(box, .5, .5)
+        self.assertEqual(jittered_click_point(box, .5, .5, 0, center, rng), center)
+        rng.randint.assert_not_called()
+
+    def test_jitter_rejection_has_bounded_work_and_safe_fallback(self):
+        rng = Mock()
+        rng.randint.return_value = 0
+        box = dict(left=0, top=0, width=3, height=3)
+        self.assertEqual(jittered_click_point(box, 0, 0, .015, (1,0), rng), (0,1))
+        self.assertEqual(rng.randint.call_count, 128)
+
+    def test_invalid_jitter_values_are_rejected(self):
+        box = dict(left=0, top=0, width=336, height=598)
+        for ratio in (True, None, "0.01", -.01, .051, float("nan"), float("inf")):
+            with self.subTest(ratio=ratio), self.assertRaises(ValueError):
+                jittered_click_point(box, .5, .5, ratio)
+
     def test_normalized_corners_map_to_box_pixels(self):
         box = {"left": 10, "top": 20, "width": 336, "height": 598}
         self.assertEqual(click_point(box, 0, 0), (10, 20))
@@ -49,9 +99,12 @@ class ClickGuardTests(unittest.TestCase):
     class User32:
         def __init__(self):
             self.calls = []
+            self.moves = []
 
         def SendInput(self, n, ptr, size):
             self.calls.append(n)
+            if n == 2:
+                self.moves.append((ptr[0].mi.dx, ptr[0].mi.dy))
             return n
 
     def instance(self, foreground=True, pressed=()):
@@ -86,6 +139,18 @@ class ClickGuardTests(unittest.TestCase):
         self.assertIsNotNone(win.last_key_up_at)
         self.assertEqual(win.last_click_at, win.last_key_down_at)
 
+    def test_actual_mouse_events_use_each_randomized_point(self):
+        win = self.instance()
+        previous = None
+        for _ in range(20):
+            self.assertTrue(win.click_at(1, self.BOX, .5, .5, 0, lambda: False, jitter_ratio=.015))
+            self.assertNotEqual(win.last_click_position, previous)
+            self.assertNotEqual(win.last_click_position, click_point(self.BOX, .5, .5))
+            expected = absolute_mouse_coords(*win.last_click_position, 0, 0, 1920, 1080)
+            self.assertEqual(win.u.moves[-1], expected)
+            previous = win.last_click_position
+        self.assertEqual(win.u.calls, [2,1]*20)
+
     def test_manual_modifiers_pause_input(self):
         win = self.instance(pressed=(0x11,))
         with self.assertRaises(OSError):
@@ -101,7 +166,7 @@ class ClickGuardTests(unittest.TestCase):
 
     def test_cancel_during_hold_still_releases_and_marks_interruption(self):
         win = self.instance()
-        polls = [False, False, True]
+        polls = [False, False, False, True]
 
         def cancelled():
             return polls.pop(0) if polls else True
@@ -110,6 +175,17 @@ class ClickGuardTests(unittest.TestCase):
         self.assertEqual(win.u.calls, [2, 1])
         self.assertTrue(win.interrupted)
         self.assertIsNotNone(win.last_key_up_at)
+
+    def test_focus_loss_during_screen_query_does_not_send(self):
+        win = self.instance()
+        focused = [True]
+        win.foreground_matches = lambda hwnd: focused[0]
+        def query():
+            focused[0] = False
+            return 0, 0, 1920, 1080
+        win.virtual_screen = query
+        self.assertFalse(win.click_at(1, self.BOX, .5, .5, 10, lambda: False))
+        self.assertEqual(win.u.calls, [])
 
     def test_failed_first_send_does_not_send_release(self):
         win = self.instance()

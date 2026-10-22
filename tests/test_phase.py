@@ -141,11 +141,12 @@ class PhaseTests(unittest.TestCase):
 class SimulatedRuntime:
     """完整Runtime循环：虚拟时间、真实状态机，输入回执只供断言。"""
     def __init__(self, *, targets=((170,172),), start=.25, duration=7,
-                 pause_at=None, focus_at=None, unknown_at=None, resize_at=None,
+                 pause_at=None, focus_at=None, unknown_at=None, resize_at=None, escape_at=None,
                  dry=False, calibrate=False, capture_frames=30, click=False):
         self.t=.001;self.duration=duration;self.pause_at=pause_at;self.focus_at=focus_at
+        self.escape_at=escape_at
         self.unknown_at=unknown_at;self.resize_at=resize_at
-        self.grabs=[];self.hits=[];self.targets=targets;self.index=0;self.effects=[]
+        self.grabs=[];self.hits=[];self.targets=targets;self.index=0;self.effects=[];self.jitter_values=[]
         self.truth=PhaseClock(.606);self.truth.observe(0,start)
         self.cfg=dict(DEFAULTS,continuous_fishing=True,dry_run=dry,calibrate_speed=calibrate,
                       capture_every_n_frames=capture_frames,
@@ -162,14 +163,17 @@ class SimulatedRuntime:
                 w=337 if sim.resize_at is not None and sim.t>=sim.resize_at else 336
                 return 0,0,w,598
             def foreground_matches(self,hwnd):return sim.focus_at is None or sim.t<sim.focus_at
-            def key_down(self,key):return key==hotkey_vk("F9") and sim.pause_at is not None and sim.t>=sim.pause_at
+            def key_down(self,key):
+                return ((key==hotkey_vk("F9") and sim.pause_at is not None and sim.t>=sim.pause_at)
+                        or (key==0x1B and sim.escape_at is not None and sim.t>=sim.escape_at))
             def release(self):pass
             def tap_space(self,hwnd,hold,cancel,guard):
                 if cancel() or not guard():return False
                 return self._press(hold)
 
-            def click_at(self,hwnd,box,x_norm,y_norm,hold,cancel,guard):
+            def click_at(self,hwnd,box,x_norm,y_norm,hold,cancel,guard,*,jitter_ratio=0):
                 if cancel() or not guard():return False
+                sim.jitter_values.append(jitter_ratio)
                 return self._press(hold)
 
             def _press(self,hold):
@@ -239,6 +243,7 @@ class PhaseRuntimeTests(unittest.TestCase):
         s = SimulatedRuntime(start=.25, targets=((170,172),), click=True).run()
         self.assertEqual(len(s.hits), 1)
         self.assertTrue(s.hits[0][3], s.hits)
+        self.assertEqual(s.jitter_values, [s.cfg["click_jitter_ratio"]])
         t = s.hits[0][0]
         self.assertGreater(t-max(x for x in s.grabs if x<=t), .120)
         self.assertFalse(s.files)
@@ -267,7 +272,7 @@ class PhaseRuntimeTests(unittest.TestCase):
         self.assertTrue(all(b-a>=.5-1e-8 for a,b in zip(s.grabs,s.grabs[1:])))
 
     def test_pause_focus_unknown_and_resize_cancel_pending_input(self):
-        for field,value in (("pause_at",.15),("focus_at",.15),("unknown_at",.50),("resize_at",.15)):
+        for field,value in (("pause_at",.15),("escape_at",.15),("focus_at",.15),("unknown_at",.50),("resize_at",.15)):
             with self.subTest(field=field):
                 s=SimulatedRuntime(start=.85,targets=((127,129),),duration=3,**{field:value}).run()
                 self.assertEqual(s.hits,[])

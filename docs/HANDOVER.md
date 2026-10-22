@@ -1,151 +1,189 @@
-# tt_fish 微信小程序适配 —— 交接文档
+# tt_fish 微信小游戏适配交接文档
 
-> 状态:微信小程序(PC 版微信)适配**代码已落地、单测已过**,实机验证(PoC 门禁)**未执行**——本环境为 Linux,PoC 需在 Windows + 微信上手动完成。
-> 基线提交:`6fa940b`(HEAD);以下改动为未提交的工作区内容。设计来源:`~/.claude/plans/clever-meandering-parrot.md`(已批准的实施计划)。
-> 最后更新:2026-10-22
+> 更新：2026-10-22。核查基线为 `d60aff4`，本轮修复保留在工作区，尚未提交。
+> 状态：已完成下列 B01～B11 代码修复及随机偏移功能；主项目 207 项自检和开发专用 PoC 13 项回归全部通过，源码包及 Windows 便携包构建、原生环境检查已通过。
+> 实机已确认独立游戏窗口、正常截图、阶段识别和限次闭环；随机偏移2次下钩均确认结算。本次观察校准已收敛并保存，本机GUI启动及偏移设置已检查。本轮剩余验收范围为完整GUI流程、2/5/8分钟分级稳定性及不同游戏窗口尺寸；物理Esc、其他DPI和设备环境暂缓，不作为本轮验收阻塞项。条件功能 F01～F04 尚未启动。
 
----
+## 一、目标和实现边界
 
-## 一、背景与目标
+原项目在 Windows 雷电／MuMu 中通过截图识别游戏阶段、预测黄条时序并注入空格；微信小游戏适配复用 `vision/phase/speed/contact/controller/scheduling`，在平台层增加微信窗口筛选、鼠标点击和界面配置。
 
-原项目是 Windows 安卓模拟器(雷电/MuMu)钓鱼小游戏的自动按键机器人:截屏 → 图像识别游戏阶段 → 黄条时序预测 → 注入空格。本次目标:让同一款游戏以**微信小程序**跑在 **PC 版微信**里时也能自动操作。
+当前配置版本为 9，程序版本仍为 1.6.0，正式构建为 `TRIAL_BUILD=False`。正常运行不自动创建轨迹、会话日志或诊断 ZIP。截图、录像和校准仍沿用原有显式入口。
 
-结论:算法层(`vision/phase/speed/contact/controller/scheduling`)与平台无关**全部复用**;平台层(截屏窗口、输入注入、GUI 筛选)改造完成。核心差异:小程序按触控设计,输入从"空格键"改为"鼠标点击注入"。
+控制器只提出 action，实际空格／点击分派集中在 `Runtime.dispatch()`，发送成功后才 commit。两种输入共用预测、时效检查及延迟学习；点击按下和抬起在同一调用中完成，取消或异常时仍尝试释放本次已按下的鼠标键。
 
-**三个杀手级未知项必须在 Windows 实机 PoC 验证后才能宣称可用**:① 小程序是否有独立可捕获 HWND;② mss 截屏是否黑屏(WebGL 硬件加速);③ 点击注入是否被小程序识别为触摸。
+截图当前仅实现 mss。`capture_backend=dxcam` 仍是预留配置，运行时明确拒绝；本轮未将备用后端或其他注入方式当作已完成能力。
 
----
+## 二、本轮修复状态
 
-## 二、当前实现状况(已完成)
+P0 为发布或实机输入前的阻塞项，P1 为适配收尾，P2 为提示体验。
 
-### 改动文件清单
-
-| 文件 | 改动 | 关键位置 |
-|---|---|---|
-| `fisher/windows.py` | 新增纯函数 `click_point`(归一化坐标→屏幕像素)、`absolute_mouse_coords`(0-65535 映射,越屏拒绝);`Windows.virtual_screen()`;`Windows.click_at(hwnd, box, x_norm, y_norm, hold_ms, cancelled, guard)`——完全镜像 `tap_space` 守卫顺序,新增手动鼠标按键检测(VK_LBUTTON/RBUTTON/MBUTTON),按下确已发出才补发抬起 | :45、:55、:124、:173 |
-| `fisher/emulators.py` | `wechat` 窗口族(别名 微信/WeChat);`MANAGERS` 排除"图片查看器/视频号";`profile_matches` 对 wechat 放宽为"同族+同尺寸+同框选"(标题随版本变化) | :4-6、:44 |
-| `fisher/config.py` | `CONFIG_VERSION=8`;新字段 `input_method`(space/click)、`click_point`(默认 [0.5,0.5])、`click_hold_ms`(默认 30)、`capture_backend`(mss/dxcam,dxcam 为预留);v7→v8 迁移:wechat 族自动 `input_method=click` 且 `min_action_interval_s` 默认提升至 0.9(仅当未手动调高时) | :12、:21、:51、:120 |
-| `fisher/runtime.py` | `Runtime.__init__` 读取新字段 + `action_word` 文案;`dispatch()` 按 `input_method` 分支 `click_at`/`tap_space`(**其余调度、guard 双检、延迟学习零改动**);文案"模拟器/按空格"按输入方式切换;click 模式预览叠加黄色十字线;`capture_backend != "mss"` 时明确报错 | :32、:361、:461 |
-| `main.py` | 下拉框自动含"微信小游戏"(EMULATORS 驱动);选项页新增输入方式单选、点击位置 X/Y、"画面中央"按钮、click_hold_ms;选微信自动勾选"仅观察"+点击模式;wechat 强制 `input_method=click`;状态栏文案输入方式感知 | `change_emulator`、`start`、`update_control` |
-| `tests/test_click.py`(新) | 14 个用例:坐标映射边界/越界拒绝、守卫语义(无焦点/取消/guard/修饰键/手动鼠标)、发送序列 [2,1]、失败不补发抬起、hold 期间取消标记 interrupted | — |
-| `tests/test_emulators.py` | +7 用例:wechat 族筛选与排除、profile 放宽、v8 迁移(wechat→click+0.9、ldplayer→space 不变、按 profile 标题推断)、非法字段校验 | — |
-| `tests/test_phase.py` | `SimulatedRuntime` 支持 `click=True`;新增点击模式全 Runtime 仿真用例(与空格模式调度/命中一致) | — |
-| `fisher/packaging.py` | `PUBLIC_FILES` 加入 `tests/test_click.py`(tools/poc 与本文档**不进**发布包) | — |
-| `config.example.json` | 同步 4 个新字段(与 DEFAULTS 键集一致,发布校验依赖) | — |
-| `.gitignore`/`.gitattributes`(新) | **原仓库缺失**(发布清单却强制要求)。现排除 `config.json`、`logs/`、`speed_profile.json`、`snapshots/`、`recordings/`、`trial_*`、`data/`、`dist/`、`.venv*`、`__pycache__` 等本机数据 | — |
-| `README.md` | 新增"微信小游戏(实验性)"章节:用法、与模拟器差异、PoC 脚本说明、**账号风控声明**;配置表新增 4 个字段;迁移说明更新至 v8 | — |
-| `tools/poc/`(新) | 4 个只读诊断脚本,详见第三节 | — |
-
-### 设计要点(接手者须知)
-
-1. **控制器只输出抽象"action",不感知输入方式**。`input_method` 的分支只存在于 `dispatch()` 一处(`runtime.py:461`)——这是刻意保持的单点,后续加新输入方式(如 ADB)照此扩展。
-2. **`click_at` 是 fire-and-forget**:不维护 `owns_space`、不调 `release()`;down/up 同一调用内完成,`hold_ms` 只作按下到抬起间隔;`last_key_down_at/up_at` 语义复用,`trial_capture` 与延迟学习无需改动。
-3. **wechat 安全默认**:选微信自动勾选"仅观察"、点击间隔 0.9s、保留失焦暂停/手动输入检测暂停——对应微信反自动化风控风险。
-4. **`capture_backend: dxcam` 是预留字段**:配置校验已放行,`Runtime.run` 会明确报错"待 PoC 验证后接入",不会静默走错路径。
-
----
-
-## 三、验证状态
-
-### 测试(本环境:Linux + `.venv-ttfish/`,numpy 2.5.4 / opencv 5.0.0)
-
-- `python selfcheck.py`:**190 个测试**,本次改动**零新增失败**;新增/扩展的 28 个用例全部通过。
-- 迁移冒烟已验证:仓库真实 v2 config → v8 `input_method=space`(模拟器用户无感);v7 wechat 配置 → `click` + 0.9s。
-
-### 既有失败(与本次改动无关,已在干净 HEAD 逐一比对确认)
-
-| 失败 | 原因 |
-|---|---|
-| `test_trial` ×2、`test_diagnostics` ×3、`test_arrival` ×1、`test_followup` ×1(共 7) | TrialRecorder ZIP 导出在本机 Python 3.13 下失败(`last_bundle=None`),疑似 zipfile/线程时序环境问题 |
-| `test_release` ×1、`test_windows_package` ×1 | 仓库缺 `.github/workflows/windows-portable.yml`、`.github/ISSUE_TEMPLATE/bug_report.md`(PUBLIC_FILES 白名单要求) |
-
----
-
-## 四、下一步:Windows 实机 PoC 门禁(未执行,最高优先级)
-
-环境:Windows + 微信 PC 版 + 小游戏;依赖 `pip install -r requirements.txt`。四个脚本均只读诊断、不进发布包,**必须按序执行**:
-
-| # | 命令 | 判定标准(通过) | 失败 fallback |
+| 编号 | 优先级 | 已完成修复 | 验证及边界 |
 |---|---|---|---|
-| 0.1 | `python tools/poc/poc_windows.py` | 存在 client 区=游戏画面的独立 HWND(**结果 A**) | 结果 B(无独立 HWND)→ 跑 0.2;仍不行 → **必须**实现 `game_rect` 偏移(见五.1),否则方案不成立 |
-| 0.2 | `python tools/poc/poc_launch.py [--args "--disable-gpu"]` | 沉浸式参数能弹出无边框小游戏窗口 | 全部参数无效 → 回到 `game_rect` 方案 |
-| 0.3 | `python tools/poc/poc_capture.py` | 各阶段帧标准差>0、中位耗时<60ms、画面在动 | 微信关闭"使用硬件加速"重测 → 仍黑屏 → 接入 dxcam/WGC(见五.2) |
-| 0.4 | `python tools/poc/poc_click.py` | 点击下钩按钮触发阶段变化;记录响应延迟 | 修 0-65535 映射/DPI → 试更长 hold(60ms)→ PostMessage 兜底 |
-| 0.5 | `python replay.py --input <0.3截图> --crop 0 0 W H` | 各阶段识别置信度 ≥0.72 | 重采模板(见五.3) |
-| 0.6 | 实机跑 3~5 轮并勾选"本次校准速度" | 校准收敛(≥18 有效样本) | 调 `input_latency_ms`/采样间隔 |
+| B01 | P0 | 补齐 `.github/workflows/windows-portable.yml` 和 `.github/ISSUE_TEMPLATE/bug_report.md`，恢复发布清单 | 原先关联的 9 项失败已消除；源码及便携包可构建。工作流仅手动触发、只上传构建产物；未在 GitHub Actions 服务上运行 |
+| B02 | P1 | 增加 `select_environment()`，界面切微信采用观察、点击和有条件的 0.9 秒默认值；最小微信配置也补齐这些默认值 | 覆盖新建、界面切换、旧配置迁移和已保存选择；切回模拟器恢复空格。详细保留规则见第三节 |
+| B03 | P0 | PoC 倒计时后确认目标，拒绝非微信目标，逐次检查焦点和几何；点击复用 `Windows.click_at()`，支持 F9/Esc 和异常抬起；正式点击在坐标准备后再检查守卫 | 伪窗口覆盖误选终端、失焦、位置变化、取消和 KeyboardInterrupt；实际游戏输入及结算已有实测 |
+| B04 | P1 | 四个 PoC 入口支持直接脚本路径和模块方式；`winreg` 移至 Windows 平台检查之后 | 8 个直接／模块 `--help` 入口通过；模拟非 Windows 平台均返回明确提示 |
+| B05 | P1 | 共享 `DiagnosticWindows`，补齐 HWND、进程 HANDLE、进程路径和子窗口枚举的 Win32 声明；不再用未声明的 `C.windll` 获取前台 HWND | Windows 原生指针宽度声明检查通过，伪造大句柄透传与释放检查通过；真实多屏/DPI 点击按用户要求暂缓验收 |
+| B06 | P1 | 原时序用例改用可控时钟；新增模拟等待超出期限时不发送、不 commit、不学习延迟的检查 | 全量与专项均通过；生产的 8/12 毫秒历史 contact 保护未放宽 |
+| B07 | P1 | 导出失败保留脱敏错误码、异常类型、处理阶段及白名单内的缺失公开文件名；保存 `export_error.json`，清理临时 ZIP，避免复用上次成功包状态 | 缺文件、权限错误和未知异常注入通过；不保留异常原文或本机绝对路径，后续成功导出清除错误状态 |
+| B08 | P2 | 控制器按输入方式提示点击位置或空格映射，窗口、录制和框选提示改用游戏窗口／输入 | 原模拟器及结算回归通过；界面实际显示效果仍随实机验收复核 |
+| B09（额外发现） | P0 | 修复 `GetSystemMetrics` 使用不存在的 `ctypes.wintypes.c_int` 导致 Windows 初始化失败，改用 `ctypes.c_int` | 原生 `DiagnosticWindows()` 初始化及随包 `desktop.py --check` 均通过 |
+| B10 | P1 | 微信筛选增加 `WeChatAppEx.exe` 等进程归属，不再依赖游戏标题包含微信 | 实机窗口标题为“塔塔冒险队”；窗口筛选回归通过 |
+| B11 | P2（测试辅助） | 正式 Runtime 增加固定 Esc 暂停及输入前取消检查 | 热键边沿、自定义暂停键兼容及完整 Runtime 待执行输入取消回归通过；物理Esc实测按用户要求暂缓，不阻塞本轮验收 |
 
-**门禁规则:0.3–0.6 任何一项失败,暂缓对外宣称可用,先补对应 fallback。** 0.1/0.2 的结果 A/B 决定五.1 是否要做。
+### 新增随机点击功能
 
----
+`click_jitter_ratio` 默认0.015，以游戏 crop 短边计算半径，允许0～0.05；0恢复固定点。启用时落点在圆形范围和crop内，不取基准点，不连续重复上一像素。抽样次数有界；输入保护和时效复核仍有效。界面用百分比配置，预览显示十字基准和范围圆圈；整个圆圈应位于按钮可点击区。随机偏移不能保证避免平台检测或账号处罚。
 
-## 五、按 PoC 结果分流的后续完善步骤
+PoC 截图也补充了参数校验、失焦／几何变化停止抓取、中文路径图片保存及 `report.json`。纯色、冻结或截图中位耗时超预算时返回非零退出码；画面内容是否正确仍需人工核对。
 
-### 5.1 PoC 结果 B:`game_rect` 偏移支持(方案已预留,未实现)
+## 三、配置默认值与保留规则
 
-小游戏嵌在微信主窗口/无边框窗口内、无独立 HWND 时:
+- 新配置仅指定 `emulator_type=wechat` 时，缺失字段默认 `input_method=click`、`dry_run=True`、`min_action_interval_s=0.9`。
+- 界面主动切换到微信时，设为观察和点击；动作间隔缺失或不高于原默认 0.24 秒时改为 0.9 秒，高于 0.24 秒的自定义值保留。
+- 界面切回雷电／MuMu时恢复空格，不主动降低已保存的动作间隔；间隔需要调整时可修改本机配置。
+- v7 及更旧的微信配置沿用上述间隔提升条件；按旧 profile 标题推断出微信时同时补齐环境种类。
+- 重开 v8 及更新配置时保留已保存的观察开关及自定义间隔，不在每次加载时强制覆盖。微信 GUI 启动仍强制使用点击。
+- 点击坐标相对保存的游戏 crop，默认 `[0.5,0.5]`，按住默认 30ms；预览显示黄色十字线及随机偏移范围。旧配置缺少偏移字段时补齐默认值，已保存的0关闭选择保留。
+- 微信选区复用检查保存的环境、客户区尺寸和四项 crop 结构，不要求新旧窗口标题相同，也不比较两次框选内容。复用前确认当前目标确为游戏；运行时仍校验裁剪边界。
 
-1. `fisher/config.py`:profile 增加 `game_rect`(`[x,y,w,h]`,相对窗口 client 区)与校验。
-2. `fisher/runtime.py:capture_box()`(:78):对外仍返回屏幕坐标 `win_left + game_rect.x + crop.x`,尺寸校验改为"client 尺寸 + game_rect 尺寸"。
-3. `main.py` 框选流程(`crop`):先在窗口截图内框一次 game_rect,再在小图内二次框选 crop;`profile` 保存两者。
-4. 测试:`tests/test_phase.py` 的 SimulatedRuntime 无需动;新增 `capture_box` 的 game_rect 用例。
+## 四、验证记录
 
-### 5.2 截屏黑屏 → dxcam / WGC 后端
+### 4.1 离线与原生检查
 
-1. 先试微信关闭硬件加速(或 `poc_launch.py --args "--disable-gpu"`),注意 30fps 上限会改变速度标定,需重跑 0.6。
-2. 仍失败:引入 dxcam(Desktop Duplication)或 Windows Graphics Capture,只允许在 `capture_backend` 层引入:
-   - `fisher/runtime.py:run()` 的 mss 上下文改为按 `capture_backend` 选择后端;不同后端的 box 语义(整屏抓取+numpy 切片 vs 直接 grab)要统一。
-   - `packaging/windows-runtime.lock.json` 加锁新依赖,走 `docs/WINDOWS.md` 的哈希流程;便携包验证跑 `build_windows.py`。
-   - 移除 `runtime.py` 里现存的 dxcam 报错守卫。
+| 项目 | 2026-10-22 结果 |
+|---|---|
+| 环境 | Windows x64，Anaconda Python 3.13.12；NumPy 2.5.4、OpenCV 5.0.0、mss 10.2.0、Pillow 13.0.0 |
+| `python selfcheck.py` | **207 项全部通过** |
+| `python -m unittest tools.poc.test_poc` | **13 项全部通过**，伪窗口及原生 ABI 检查，不发送系统输入或截图 |
+| `python build_release.py` | 已生成 `dist/tt_fish-1.6.0.zip` |
+| `python build_windows.py` | 已生成 `dist/tt_fish-1.6.0-Windows-x64.zip`，固定组件逐项哈希校验 |
+| 随包原生检查 | Python 3.12.15 / Tcl 8.6.15，Tk、ImageTk、识别资源、录像编码/解码、Windows 输入结构和显示器接口检查通过；不截图、不发送输入 |
+| 随包自检 | 解压便携包后，用随包 Python 3.12.15 运行自检，**207项全部通过**；ZIP完整性、清单哈希和当前公开文件内容一致性检查通过 |
+| `python -m tools.poc.poc_windows` | 已确认“塔塔冒险队”独立顶层窗口（`Chrome_WidgetWin_0` / `WeChatAppEx.exe`），客户区686×1315；正常桌面会话可枚举 |
+| `python -m tools.poc.poc_launch --no-launch` | 找到本机 `Tencent/Weixin/Weixin.exe`；未启动微信，未验证候选启动参数 |
 
-### 5.3 模板/ROI 重标定(PoC 0.5 置信度不足时)
+修复前同机基线为 190 项、180 通过、5 项失败和 5 项异常。其中 7 次诊断导出异常均追到缺少 workflow，另 2 项发布测试受相同缺文件问题影响；不是已证实的 Python 3.13 / zipfile 兼容问题。剩余 1 项真实时钟测试曾全量失败、专项通过，本轮已按 B06 处理。
 
-1. 用现有素材流程重采 `assets/templates/` 的 9 个模板(小程序画面),保持 `templates.py` 的 `TEMPLATE_DEFINITIONS` 尺寸一致。
-2. 不建议双模板并存(每帧 matchTemplate 翻倍);若必须并存:`Detector.__init__` 加 `asset_dir` 参数,`runtime.run()` 按 `emulator_type` 选目录,同步 `packaging.py`。
-3. `normalize()` 非保形拉伸差异约 2~3% 通常可容忍;ROI 像素约束(`2<=w<=22` 等)用 `replay.py` 实测复核。**改 normalize(letterbox/center-crop)是最后手段**——会破坏全局 336×598 坐标约定,需同步 `tests/fixtures.py` 与所有 ROI 常量。
+`tools/poc/` 及本文档不进入公开包。源码包中的 workflow 仅在开发专用测试文件存在时运行 PoC 测试，发布源码缺少该目录时仍可构建。
 
-### 5.4 前台判定失效(按 0.1 实测)
+### 4.2 已有实机证据及剩余边界
 
-小游戏若在 `WeChatAppEx` 子进程独立顶层窗口:`windows.py:foreground_matches`(:121)改为双方 `GetAncestor(GA_ROOT)` 比较,并补 `tests/test_emulators.py` 用例。
+- 微信PC版本4.1.13.65。窗口客户区686×1315；去掉顶部66像素微信栏后，crop为 `[0,66,686,1249]`，输入基准为该crop内 `[0.5,0.86]`。这些是本机本次验证值，其他尺寸需重新框选。
+- mss抓取12帧，中位19.91ms、最大24.90ms，画面非黑屏；静态初始页的中位帧差0.715未达到脚本阈值1，因此该次脚本退出1，不能据此判断冻结。后续实际阶段变化和实时识别已证明画面持续更新。
+- 首次Runtime限次验证：1次下钩、1次结算，约15.82秒；IDLE/WAIT/BITE/TIMING/RESULT首次识别置信度分别约0.921/0.878/0.754/0.946/0.809。
+- 后续普通自动运行：5次下钩确认4次结算，约72.27秒；最后一次未确认结算，不能记为5次全部成功。校准只有9个有效样本，未达到收敛条件。
+- 随机偏移验证：2次下钩确认2次结算，约27.44秒；记录8次真实落点，均不相同。两轮均未进入TIMING，未取得校准样本。
+- 前一次观察校准进入TIMING后，用户Esc停止了Computer Use，验证被中断；该次不记为通过。
+- 本次恢复验证：开发封装在TIMING阶段暂时只观察，待校准完成再恢复输入，最终1次下钩、1次结算，约24.16秒。取得22个样本、20个内点，速度为0.605381819条宽/秒（约60.54%），相对MAD为0.008988，已完成并保存；6次真实落点各不相同。这是显式开发校验流程，不是新增的自动校准产品模式，也不证明普通运行固定轮数内可完成校准。
+- 校准证据为 `snapshots/wechat_calibration_resume/session.json` 和阶段截图；验证后的统计已通过正式保存接口写入源码版根目录 `speed_profile.json`，本机后续运行可复用。便携版使用自己的 `data/speed_profile.json`，这些本机参数不随包分发。
+- 使用独立临时数据目录启动GUI，确认能列出“塔塔冒险队”、选择微信点击模式，并显示1.5%的随机偏移配置。已关闭临时GUI；框选按钮的完整流程和界面启动自动钓鱼尚未走通验收，不记为通过。
+- 仅观察模式下发送两次自动化Escape按键，未被Runtime全局键状态轮询捕获；该次50.30秒限时结束，下钩、结算和点击均为0，报告为 `snapshots/wechat_escape_validation/session.json`。无法由此确认物理Escape是否存在问题；用户后续确认物理Esc暂停只作测试阶段事项，暂缓验证、不作为阻塞项，也不记为实测通过。离线热键及输入取消回归保持通过。
+- 阶段截图、运动统计和本地报告位于已忽略的 `snapshots/`；含游戏昵称等内容，不进入公开包。临时测试封装在已忽略的 `.build-cache/`，不是产品功能。
 
-### 5.5 实机回归(全部 PoC 通过后)
+本机观察校准收敛与参数保存已验证；独立测量的游戏响应延迟、长期命中率及其他设备/DPI/微信版本仍未完成验证。本轮稳定性只按2/5/8分钟验收，不能据此宣称小时级稳定性；兼容性只验证不同游戏窗口尺寸。物理Esc及其他环境测试按用户要求暂缓。Windows环境检查和离线仿真不能替代实机结果。
 
-1. `dry_run=True` 观察:预览 state/fps 稳定跟随;十字线落在可点击区。
-2. 小流量:关"仅观察",`max_casts=2`、`max_session_minutes=2`,验证 IDLE→CAST→WAIT→BITE→HOOK 闭环与 `action_ack_timeout_s`。
-3. 黄条:勾选校准跑 3~5 轮,验证 HIT 命中与校准收敛。
-4. 故障注入:运行中手动点鼠标/按修饰键 → 暂停;切窗口 → 失焦暂停;改窗口尺寸 → 报错重框选。
+## 五、实机 PoC 执行顺序
 
----
+从仓库根目录执行；微信中打开目标小游戏。截图／点击脚本默认倒计时 5 秒后确认目标，F9/Esc 可取消；正式Runtime现在也支持Esc。建议显式指定由窗口枚举得到的十进制 `HWND`，并保持游戏处于前台且无遮挡。
 
-## 六、遗留风险与未决事项
+| 步骤 | 命令 / 操作 | 通过条件及分流 |
+|---|---|---|
+| 0.1 窗口 | `python -m tools.poc.poc_windows` | 记录标题、类名、进程和客户区尺寸，确定独立窗口或父窗口内游戏区域。默认仅打印微信相关窗口；`--all` 才包括其他应用 |
+| 0.2 可选启动 | `python -m tools.poc.poc_launch --no-launch`；需要启动测试时使用 `--args=--disable-gpu`，可用 `--exe` 指定路径 | 默认不带 `--no-launch` 会真实启动微信；参数是否有效需实测。没有独立 HWND 时先验证现有 crop，不强制开发 game_rect |
+| 0.3 截图 | `python -m tools.poc.poc_capture --hwnd HWND --out snapshots` | 各阶段画面正确、持续更新、非纯色，中位抓取 <60ms；核对图片及 `report.json`。异常时先核查硬件加速设置，再评估 F02 |
+| 0.4 点击 | `python -m tools.poc.poc_click --hwnd HWND --n 1 --x X --y Y` | 会真实点击；默认偏移1.5%，可用 `--jitter-percent 0` 关闭；预期游戏阶段变化，并记录响应延迟。先核对坐标、DPI、虚拟屏幕和 hold，不把 SendInput 成功当成游戏接收 |
+| 0.5 识别 | `python replay.py --input snapshots/frame_000.png --crop X Y W H` | 收集各阶段截图，标签与实际一致并记录置信度；≥0.72 作为本轮候选验收值，不等于现有所有阶段的识别阈值。正确裁剪后仍不足再评估 F03 |
+| 0.6 闭环 | 先观察，再限次运行并勾选“本次校准速度” | 完成下钩、等待、拉钩、黄条和结算；真实命中并保存校准结果，见下节 |
 
-1. **账号风控(最高风险)**:微信侧反自动化可能限流/封号。代码层默认已收敛(仅观察默认、0.9s 间隔),但 README 与界面声明不能替代用户自行确认平台规则。**不建议**后续引入内存读取/AES 注入等更高风险方案。
-2. **git 历史隐私泄露(未处理)**:`config.json`(作者框选坐标)与 `logs/session_20261021_161203_733593.jsonl` 仍留在提交 `976aec5` 的历史中。若仓库公开,需 `git filter-repo` 清理历史并强制推送,仅删文件无效。
-3. **发布链路缺文件(既有问题)**:`.github/workflows/windows-portable.yml`、`.github/ISSUE_TEMPLATE/bug_report.md` 缺失,`build_release.py`/`build_windows.py` 与 `test_release` 当前会失败。
-4. **7 个 TrialRecorder 导出测试失败(既有,环境相关)**:在 Python 3.13 下 ZIP 导出失败,需排查 `fisher/trial_capture.py` 的 `_export` 线程(建议优先在 Windows/官方锁定版 Python 3.12.15 复测,再决定是否修代码)。
-5. **`capture_backend: dxcam` 为预留**:校验放行但运行时明确报错,不会静默错误。
-6. **既有技术债(与本次无关,可选)**:`contact`/`center` 计时策略不可达但代码保留;`purple.png` 模板死资源;ROI 硬编码散布;正式构建无运行日志;录制崩溃一致性(见初次分析报告)。
+点击命令的 X/Y 为整个客户区的 0～1 比例坐标，replay 的 X/Y/W/H 为游戏区域像素裁剪；Runtime 点击基准是 crop，三者不可混用。图片保存在已忽略的 `snapshots/`，公开前需检查内容。
 
----
+0.3～0.6 任一项未通过，不宣称微信适配可用。记录微信版本、DPI、多屏布局、窗口模式、结果和必要的脱敏证据。
 
-## 七、关键文件索引
+### 实机回归细节
+
+1. 仅观察时，预览状态/fps 应跟随游戏，十字线落在可点击区域。
+2. 限次测试先取消“不停钓”（`continuous_fishing=False`），关闭“仅观察”，设置 `max_casts=2`、`max_session_minutes=2`；不停钓开启时次数和时长上限无效。
+3. 校准可先跑 3～5 轮，必要时延长；要求 ≥18 个内点、双向各 ≥4、≥3 个分段，并满足离散度和连续稳定判定，不保证固定轮数即可收敛。
+4. 输入前保持鼠标键或修饰键按下应暂停；切窗口应失焦暂停；窗口尺寸变化应要求重新框选。手动鼠标检测是输入前轮询，不保证捕捉全部短暂点击。
+
+## 六、条件开发功能
+
+以下不是未修复 bug。取得对应实测证据后再开发。
+
+| 编号 | 功能 | 启动条件 | 实现边界与验收 |
+|---|---|---|---|
+| F01 | 游戏区域定位，必要时 `game_rect` / 两级选区 | 现有父窗口 crop 无法稳定定位 | `capture_box()` 已支持 crop 屏幕偏移；仅有明确两级定位需求时扩展配置、框选及坐标测试，保证截图与点击基准一致 |
+| F02 | dxcam 或 WGC 后端 | mss 异常且设置调整无效 | 统一 box、颜色格式、窗口变化及资源释放；同步锁定依赖、发布清单和便携构建，实测截图预算 |
+| F03 | 微信模板及 ROI 适配 | 正确裁剪的实机素材仍识别不足 | `Detector.__init__` 已接受 `asset_dir`，优先按环境选择一套模板；同步资源打包。修改 normalize 时一并核对 336×598 坐标和所有 ROI |
+| F04 | 子窗口前台归属 | 必须选择子 HWND 且现有前台判定失效 | 当前只归一化前台窗口；按需要评估双方根窗口比较，并证明同父窗口其他界面不会误判为游戏焦点 |
+
+不预设关闭硬件加速后必为 30fps，也不预设非保形拉伸一定可容忍。帧率或画面时序改变后重新验证校准。
+
+## 七、验收任务状态
+
+| 编号 | 状态 | 下一步 |
+|---|---|---|
+| V01 窗口／截图／点击 | 本机已验证独立窗口、截图、主要阶段识别及输入闭环 | 补不同游戏窗口尺寸验证；其他DPI、分辨率、多屏、设备及微信版本环境暂缓 |
+| V02 闭环／校准／故障 | 限次闭环、随机落点及本机观察校准保存已实测；停止保护有离线回归及失焦拒绝记录；物理Esc实测按用户要求暂缓 | 补界面暂停、尺寸变化实测及2/5/8分钟分级稳定性验证 |
+| V03 发布 | 自检、源码包、便携构建、随包自检及原生环境检查通过；临时GUI启动和偏移设置已检查 | 补GUI完整框选及启动游戏操作；GitHub Actions 云端执行尚未验证 |
+
+执行顺序：完整GUI流程 → 独立运行2分钟、5分钟、8分钟三级稳定性 → 不同游戏窗口尺寸。每一级通过后再进入下一级；不再采用之前建议的10分钟、30分钟、2小时及至少30轮配额。物理Esc、不同系统DPI/显示分辨率、多屏、其他设备和微信版本测试暂不安排。现有窗口、截图和主要阶段识别没有触发备用方案条件。
+
+### 本轮待执行验收清单
+
+下列为用户确认范围后的待执行计划，不表示已经通过。
+
+| 编号 | GUI操作 | 通过标准 |
+|---|---|---|
+| G01 | 便携版启动、选择微信环境、刷新游戏窗口 | 无异常，能选中目标游戏，启动后保持暂停 |
+| G02 | 点击框选，3秒内切回游戏，拖框并确认 | 完整包含游戏，排除微信标题栏；预览与选区一致 |
+| G03 | 设置点击位置和1.5%随机半径，显示预览 | 基准及整个随机范围处于各阶段共用按钮内 |
+| G04 | 仅观察模式下手动钓鱼一轮 | 阶段识别跟随画面，程序不发送点击 |
+| G05 | 通过GUI分别验证限次、限时自动运行 | 完成操作闭环，到达对应限制后暂停；两项分开测试，均关闭不停钓 |
+| G06 | 在倒计时、等待和黄条阶段点击暂停／取消启动 | 待启动及待执行点击被取消，明确启动后才恢复 |
+| G07 | 运行中切至其他窗口，再返回游戏 | 失焦暂停并提示，返回后不自行恢复 |
+| G08 | 分别移动、缩放、最小化和关闭游戏窗口 | 移动后坐标正确；尺寸变化要求重框；目标不可用时停止输入 |
+| G09 | 修改设置并应用，关闭后重开 | 设置保留、重开暂停；同尺寸旧选区正确复用 |
+| G10 | 分别设置0和1.5%随机半径，记录实际落点 | 0固定；启用后范围正确、不连续重复、不越出按钮 |
+| G11 | 停止监测、重新监测、退出助手 | 可重启监测；退出后无残留操作或鼠标按住状态 |
+
+| 编号 | 独立运行时长 | 验收重点 |
+|---|---|---|
+| L01 | 2分钟 | 基本连续闭环、随机落点和结算返回，无异常退出或误点 |
+| L02 | 5分钟 | 连续多轮流程、结算重试与识别稳定性；未完成轮次逐一记录原因 |
+| L03 | 8分钟 | 延续前两级检查，观察CPU、内存、界面响应及截图耗时，无明显持续恶化 |
+
+三级各从新会话计时，总计划运行时长15分钟；不含准备及暂停时间。关闭仅观察和不停钓，将下钩次数上限设为足够高，运行分钟上限分别为2、5、8。到时自动暂停；末轮如因时限未完成，单列为限时中断，不记成功。若因故障提前暂停，该级不记满时通过。资源数据由验收时临时采集，不启用日常自动日志。
+
+| 编号 | 游戏窗口尺寸 | 操作及通过标准 |
+|---|---|---|
+| W01 | 当前正常尺寸 | 重新核对框选，先观察再运行5轮；截图、识别及点击正确 |
+| W02 | 游戏允许的较小尺寸 | 停止监测、调整尺寸、重新框选，再运行5轮；随机范围仍落在按钮内 |
+| W03 | 游戏允许的较大尺寸 | 同上，运行5轮；无额外坐标偏移、截断或识别异常 |
+
+三档只调整游戏窗口，保持系统DPI、显示分辨率、设备和微信版本不变，记录各档实际客户区及crop尺寸。尺寸变更后的旧选区必须失效，重框后可恢复；只移动窗口不要求重框。每级记录实际运行时长、下钩数、确认结算数、未完成原因和暂停原因。
+
+## 八、关键文件
 
 | 文件 | 接手要点 |
 |---|---|
-| `fisher/windows.py` | 点击注入全部逻辑(`click_point` :45、`click_at` :173);新增输入方式照此扩展 |
-| `fisher/runtime.py` | 输入分支唯一改动点 `dispatch` :461;`capture_box` :78 是 game_rect 改造点 |
-| `fisher/config.py` | v8 字段 :21、校验 :51、迁移 :120;新增字段须同步 `config.example.json` 与 DEFAULTS |
-| `fisher/emulators.py` | wechat 族 :4-6;标题别名集中在此维护(微信更新改标题只动这里) |
-| `main.py` | 选微信自动安全默认(`change_emulator`);wechat 强制 click(`start`) |
-| `tests/test_click.py` | 新输入方式的守卫测试模板 |
-| `tools/poc/` | 实机验证脚本,不进发布包;结论回填后按五分流 |
-| `docs/HANDOVER.md` | 本文档 |
+| `fisher/windows.py` | 坐标、前台判定、空格和点击输入，点击前最终守卫及异常释放 |
+| `fisher/config.py` | v9 校验、`select_environment`、旧配置迁移；新字段需同步示例 |
+| `fisher/runtime.py` | `capture_box`、`dispatch`，共用调度和输入分派 |
+| `fisher/controller.py` | 阶段动作、成功后 commit、按输入方式生成提示 |
+| `main.py` | 环境切换、框选、观察和输入设置 |
+| `fisher/packaging.py` | 明确公开清单与可识别的缺文件异常 |
+| `fisher/trial_capture.py` | 开发诊断、脱敏导出原因及临时文件清理 |
+| `tests/test_click.py`、`tests/test_trial.py`、`tests/test_emulators.py` | 输入保护、时效和导出失败、环境默认值回归 |
+| `tools/poc/common.py`、四个 PoC 入口、`tools/poc/test_poc.py` | 开发专用诊断，不随发布包分发 |
+| `.github/workflows/windows-portable.yml` | 手动构建，不自动发布 Release |
 
-## 八、提交建议
+## 九、历史与未决边界
 
-工作区改动建议分批提交(遵循项目 conventional commits 风格):
+当前核查基线的可见历史只有 `34402c0`、`d60aff4`；旧交接的 `6fa940b`、`976aec5` 及外部实施计划未在当前材料中核实。对 `config.json` / `logs` 的路径历史查询无结果，但未审计远端或不可见对象，不据此安排历史重写或强制推送。
 
-1. `feat: 微信小游戏鼠标点击输入与窗口支持` — windows.py / emulators.py / config.py / runtime.py / main.py / config.example.json / tests / README.md
-2. `chore: 补充 .gitignore 与 .gitattributes,排除本机运行数据` — .gitignore / .gitattributes(注意:已提交的 config.json 与 logs 需另行从历史清理)
-3. `chore: 新增微信小游戏 PoC 诊断脚本` — tools/poc/
+保留 README 的微信实验性及账号风险说明。历史 contact/center 实现可由代码及回归调用，GUI 固定 phase；无自动日志是既定行为。ROI 集中管理、未使用模板清理及录制崩溃一致性可另行评估。
 
-提交前:在 Windows 上跑一遍 PoC 门禁(第四节),把 0.1~0.6 结论填入本文件"验证状态"。
+本轮未创建 Git 提交、未推送、未执行云端工作流或对外发布。后续每次更新测试计数和实机结论，不把环境检查或离线仿真写成实际游戏通过。

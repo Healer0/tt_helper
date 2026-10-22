@@ -13,7 +13,7 @@ def main(show_errors=True):
     import queue
     import mss
     from PIL import Image, ImageTk
-    from fisher.config import load_config, save_config, validate_config, HOTKEYS
+    from fisher.config import load_config, save_config, validate_config, select_environment, HOTKEYS
     from fisher.config import DATA_ROOT
     from fisher.windows import Windows
     from fisher.runtime import Runtime
@@ -136,7 +136,7 @@ def main(show_errors=True):
                                         value=value, command=self.update_click_entries)
                 radio.pack(side="left", padx=(8, 0))
                 self.settings_widgets.append(radio)
-            ttk.Label(options, text="微信小游戏请选“鼠标点击”；点击位置为画面比例坐标，\n预览中的黄色十字线即点击目标。", wraplength=440,
+            ttk.Label(options, text="微信小游戏请选“鼠标点击”；位置为画面比例坐标。\n预览十字线是基准点，圆圈是随机范围，请全部放在按钮内。", wraplength=440,
                       foreground="#555555").pack(anchor="w", pady=(0, 4))
             point_row = ttk.Frame(options)
             point_row.pack(fill="x", pady=3)
@@ -150,6 +150,14 @@ def main(show_errors=True):
                 self.click_entries.append(entry)
                 self.settings_widgets.append(entry)
             ttk.Button(point_row, text="画面中央", command=self.reset_click_point).pack(side="left", padx=(6, 0))
+            jitter_row = ttk.Frame(options)
+            jitter_row.pack(fill="x", pady=3)
+            ttk.Label(jitter_row, text="随机偏移半径（画面短边的%，0关闭）").pack(side="left")
+            self.click_jitter = tk.StringVar(value=f'{self.cfg["click_jitter_ratio"]*100:g}')
+            jitter_entry = ttk.Entry(jitter_row, textvariable=self.click_jitter, width=5)
+            jitter_entry.pack(side="right")
+            self.click_entries.append(jitter_entry)
+            self.settings_widgets.append(jitter_entry)
             self.update_click_entries()
             fields = [(options, "capture_every_n_frames", "每多少帧截图一次（1～60）"),
                       (options, "max_casts", "单次最多下钩次数"),
@@ -191,7 +199,7 @@ def main(show_errors=True):
             ttk.Label(settings, text=f'结果页重试间隔：{self.cfg["result_retry_s"]:g}秒 ± {self.cfg["result_retry_jitter_ms"]:g}毫秒', wraplength=490).pack(anchor="w", pady=3)
             ttk.Label(settings, text="修改设置前请停止监测。", wraplength=490).pack(anchor="w", pady=3)
             ttk.Button(recording, text="3秒后录制15秒手动操作", command=self.record).pack(fill="x", pady=5)
-            ttk.Label(recording, text="先开启监测，再点击录制并切回模拟器。\n录制期间手动钓鱼，自动按键暂停。\n录像和时间戳保存在recordings文件夹。", wraplength=490).pack(anchor="w", pady=5)
+            ttk.Label(recording, text="先开启监测，再点击录制并切回游戏窗口。\n录制期间手动钓鱼，自动操作暂停。\n录像和时间戳保存在recordings文件夹。", wraplength=490).pack(anchor="w", pady=5)
             self.update_limits()
             self.start_button = ttk.Button(panel, text="3. 应用设置并开启监测", command=self.start)
             self.start_button.pack(fill="x", pady=(6,3))
@@ -282,7 +290,7 @@ def main(show_errors=True):
 
         def update_hotkey_hint(self):
             self.hotkey_hint.set(f'切回游戏窗口后：{self.cfg["toggle_hotkey"]} 开始／暂停\n'
-                                 f'{self.cfg["pause_hotkey"]} 紧急暂停 · {self.cfg["snapshot_hotkey"]} 保存截图')
+                                 f'{self.cfg["pause_hotkey"]}／Esc 紧急暂停 · {self.cfg["snapshot_hotkey"]} 保存截图')
 
         def lock_settings(self, locked):
             for widget in self.settings_widgets:
@@ -300,12 +308,11 @@ def main(show_errors=True):
         def change_emulator(self, event=None):
             if self.runtime:
                 return
-            self.cfg["emulator_type"] = self.selected_emulator()
-            if self.cfg["emulator_type"] == "wechat":
-                # 微信小程序默认仅观察并采用鼠标点击，降低误点与风控风险。
-                self.dry.set(True)
-                self.input_method.set("click")
-                self.update_click_entries()
+            self.cfg["dry_run"] = self.dry.get()
+            self.cfg = select_environment(self.cfg, self.selected_emulator())
+            self.dry.set(self.cfg["dry_run"])
+            self.input_method.set(self.cfg["input_method"])
+            self.update_click_entries()
             self.include_other.set(False)
             self.refresh()
 
@@ -421,7 +428,7 @@ def main(show_errors=True):
                 messagebox.showinfo("请先停止", "应用新设置前先点“停止监测”，然后重新开始。")
                 return
             if not self.hwnd or not self.profile:
-                messagebox.showinfo("先框选", "请先选择模拟器窗口并框选完整游戏画面。")
+                messagebox.showinfo("先框选", "请先选择游戏窗口并框选完整游戏画面。")
                 return
             try:
                 cfg = dict(self.cfg)
@@ -437,6 +444,7 @@ def main(show_errors=True):
                     # 微信小游戏按触控设计，目前仅支持鼠标点击。
                     cfg["input_method"] = "click"
                 cfg["click_point"] = [float(self.click_x.get()), float(self.click_y.get())]
+                cfg["click_jitter_ratio"] = float(self.click_jitter.get()) / 100
                 for key,var in self.values.items():
                     if cfg["continuous_fishing"] and key in ("max_casts", "max_session_minutes"):
                         continue

@@ -188,6 +188,15 @@ class SamplingTests(unittest.TestCase):
 
 
 class HotkeyTests(unittest.TestCase):
+    def test_escape_always_pauses_and_cancels_even_with_custom_emergency_key(self):
+        cfg = dict(DEFAULTS, pause_hotkey="F7")
+        h = Hotkeys(cfg)
+        self.assertEqual(h.poll(lambda key: key == 0x1B), ["pause"])
+        self.assertEqual(h.poll(lambda key: key == 0x1B), [])
+        class Win:
+            def key_down(self, key): return key == 0x1B
+        self.assertTrue(Runtime(Win(), 1, {}, cfg).input_cancelled())
+
     def test_custom_keys_replace_defaults_and_hold_does_not_repeat(self):
         h = Hotkeys(dict(DEFAULTS, toggle_hotkey="F6", pause_hotkey="F7"))
         down = {hotkey_vk("F8"), hotkey_vk("F9")}

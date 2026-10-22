@@ -9,7 +9,7 @@ from .emulators import EMULATORS, title_family
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_ROOT = Path(os.environ["TT_FISH_DATA_DIR"]).resolve() if os.environ.get("TT_FISH_DATA_DIR") else ROOT
-CONFIG_VERSION = 8
+CONFIG_VERSION = 9
 REFERENCE_FPS = 60
 HOTKEYS = tuple(f"F{i}" for i in range(1, 13))
 DEFAULTS = {
@@ -19,6 +19,7 @@ DEFAULTS = {
     "dry_run": False, "continuous_fishing": True,
     "capture_every_n_frames": 6, "emulator_type": "ldplayer",
     "input_method": "space", "click_point": [0.5, 0.5], "click_hold_ms": 30,
+    "click_jitter_ratio": 0.015,
     "capture_backend": "mss",
     "toggle_hotkey": "F8", "pause_hotkey": "F9", "snapshot_hotkey": "F10",
     "input_latency_ms": 40, "latency_uncertainty_ms": 12, "key_hold_ms": 35,
@@ -28,6 +29,21 @@ DEFAULTS = {
     "action_ack_timeout_s": 5, "max_casts": 20,
     "max_session_minutes": 15, "template_threshold": 0.68, "profile": None,
 }
+WECHAT_ACTION_INTERVAL_S = 0.9
+
+
+def select_environment(cfg, emulator_type):
+    """用户切换环境时应用输入预设；高于旧默认值的自定义间隔保留。"""
+    if emulator_type not in EMULATORS:
+        raise ValueError("请选择" + "、".join(EMULATORS.values()))
+    updated = dict(cfg, emulator_type=emulator_type,
+                   input_method="click" if emulator_type == "wechat" else "space")
+    if emulator_type == "wechat":
+        updated["dry_run"] = True
+        interval = updated.get("min_action_interval_s", DEFAULTS["min_action_interval_s"])
+        if isinstance(interval, (int, float)) and not isinstance(interval, bool) and interval <= DEFAULTS["min_action_interval_s"]:
+            updated["min_action_interval_s"] = WECHAT_ACTION_INTERVAL_S
+    return updated
 
 
 def capture_interval(cfg):
@@ -42,6 +58,10 @@ def validate_config(data):
     if not isinstance(data, dict):
         raise ValueError("配置文件应为JSON对象")
     cfg = dict(DEFAULTS)
+    if data.get("emulator_type") == "wechat":
+        # 仅补齐缺失值，重开时不覆盖用户已保存的观察/输入/间隔选择。
+        cfg.update(input_method="click", dry_run=True,
+                   min_action_interval_s=WECHAT_ACTION_INTERVAL_S)
     cfg.update(data)
     # 避免与 DEFAULTS 共享列表对象；校验失败时也不污染默认值。
     if cfg["click_point"] is DEFAULTS["click_point"]:
@@ -67,6 +87,7 @@ def validate_config(data):
         "capture_every_n_frames": (1, 60), "input_latency_ms": (0, 250),
         "latency_uncertainty_ms": (0, 100), "key_hold_ms": (10, 150),
         "click_hold_ms": (10, 150),
+        "click_jitter_ratio": (0, 0.05),
         "target_margin_px": (0, 20), "min_action_interval_s": (0.15, 5),
         "result_wait_s": (1, 30), "result_retry_s": (0.5, 15),
         "result_retry_jitter_ms": (0, 100), "unknown_timeout_s": (0, 3600),
@@ -121,10 +142,14 @@ def load_config(path=None):
         # v8 引入输入方式：微信小游戏默认鼠标点击，其余保持空格。
         wechat = data.get("emulator_type") == "wechat" or title_family(
             (data.get("profile") or {}).get("title", "")) == "wechat"
+        if "emulator_type" not in data and wechat:
+            data["emulator_type"] = "wechat"
         data.setdefault("input_method", "click" if wechat else "space")
         # 微信窗口点击节奏更保守：仅在未手动调高间隔时提升默认值。
-        if wechat and data.get("min_action_interval_s", DEFAULTS["min_action_interval_s"]) <= DEFAULTS["min_action_interval_s"]:
-            data["min_action_interval_s"] = 0.9
+        interval = data.get("min_action_interval_s", DEFAULTS["min_action_interval_s"])
+        if (wechat and isinstance(interval, (int, float)) and not isinstance(interval, bool)
+                and interval <= DEFAULTS["min_action_interval_s"]):
+            data["min_action_interval_s"] = WECHAT_ACTION_INTERVAL_S
     return validate_config(data)
 
 

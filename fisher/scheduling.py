@@ -32,6 +32,7 @@ class Hotkeys:
             (hotkey_vk(cfg["toggle_hotkey"]), "toggle"),
             (hotkey_vk(cfg["snapshot_hotkey"]), "snapshot"),
             (hotkey_vk(cfg["pause_hotkey"]), "pause"),
+            (0x1B, "pause"),  # Escape 始终可以紧急暂停。
         )
         self.pause_vk = hotkey_vk(cfg["pause_hotkey"])
         self.previous = {key: False for key, _ in self.bindings}

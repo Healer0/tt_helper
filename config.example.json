@@ -1,5 +1,5 @@
 {
-  "config_version": 8,
+  "config_version": 9,
   "timing_mode": "phase",
   "adaptive_latency": true,
   "show_preview": false,
@@ -10,6 +10,14 @@
   "continuous_fishing": true,
   "capture_every_n_frames": 6,
   "emulator_type": "ldplayer",
+  "input_method": "space",
+  "click_point": [
+    0.5,
+    0.5
+  ],
+  "click_hold_ms": 30,
+  "click_jitter_ratio": 0.015,
+  "capture_backend": "mss",
   "toggle_hotkey": "F8",
   "pause_hotkey": "F9",
   "snapshot_hotkey": "F10",
@@ -28,12 +36,5 @@
   "max_casts": 20,
   "max_session_minutes": 15,
   "template_threshold": 0.68,
-  "profile": null,
-  "input_method": "space",
-  "click_point": [
-    0.5,
-    0.5
-  ],
-  "click_hold_ms": 30,
-  "capture_backend": "mss"
+  "profile": null
 }

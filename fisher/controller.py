@@ -192,8 +192,9 @@ class Controller:
             self.pending_timing = None
         if self.pending_ack:
             if now-self.pending_ack[1] > self.cfg["action_ack_timeout_s"]:
-                return Decision(reason="按键后画面未进入下一阶段，已暂停；请检查空格映射", pause=True, pause_code="action_ack_timeout")
-            return Decision(reason="已按键，等待阶段变化")
+                hint = "点击位置" if self.cfg.get("input_method") == "click" else "空格映射"
+                return Decision(reason=f"输入后画面未进入下一阶段，已暂停；请检查{hint}", pause=True, pause_code="action_ack_timeout")
+            return Decision(reason="已发送输入，等待阶段变化")
         if self.state == "WAIT":
             expired = now-self.entered > self.cfg["wait_timeout_s"]
             return Decision(reason="等待上钩超时，已暂停" if expired else "等待鱼上钩",
@@ -211,7 +212,8 @@ class Controller:
                 return Decision(reason="等待结果动画")
             if self.next_result_press_at is not None and now < self.next_result_press_at:
                 return Decision(reason="等待结果页关闭")
-            return Decision("CLOSE", "结果页持续可见，尝试空格关闭")
+            action_word = "点击" if self.cfg.get("input_method") == "click" else "空格"
+            return Decision("CLOSE", f"结果页持续可见，尝试{action_word}关闭")
         elif self.state == "TIMING":
             return self._timing(obs, frame_time, now)
         return Decision(reason="等待画面稳定")

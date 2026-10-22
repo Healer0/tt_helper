@@ -4,12 +4,18 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from fisher.config import DEFAULTS, load_config, validate_config
+from fisher.config import CONFIG_VERSION, DEFAULTS, load_config, validate_config, select_environment
 from fisher.emulators import select_windows, profile_matches
 from fisher.windows import Windows
 
 
 class EmulatorTests(unittest.TestCase):
+    def test_wechat_process_family_accepts_game_title_without_wechat_alias(self):
+        windows = [(1, "塔塔冒险队"), (2, "微信"), (3, "其他游戏"), (4, "微信图片查看器")]
+        families = {1: "wechat", 4: "wechat"}
+        self.assertEqual({row[0] for row in select_windows(windows, "wechat", window_families=families)}, {1, 2})
+        self.assertEqual({row[0] for row in select_windows(windows, "wechat", True, families)[:2]}, {1, 2})
+
     def test_window_families_and_renamed_fallback(self):
         windows = [(1,"雷电模拟器"),(2,"MuMu安卓设备"),(3,"MuMu Player 12"),
                    (4,"MuMu多开器"),(5,"tt_fish · 钓鱼助手"),(6,"游戏实例A")]
@@ -63,6 +69,23 @@ class EmulatorTests(unittest.TestCase):
 
 
 class UpgradeTests(unittest.TestCase):
+    def test_v8_adds_jitter_without_overwriting_existing_preferences(self):
+        old = dict(DEFAULTS, config_version=8, emulator_type="wechat", input_method="click",
+                   click_point=[.3,.86], dry_run=False, min_action_interval_s=.7)
+        old.pop("click_jitter_ratio")
+        cfg = self.read(old)
+        self.assertEqual(cfg["config_version"], CONFIG_VERSION)
+        self.assertEqual(cfg["click_jitter_ratio"], .015)
+        for key in ("click_point", "dry_run", "min_action_interval_s"):
+            self.assertEqual(cfg[key], old[key])
+        cfg["click_jitter_ratio"] = 0
+        self.assertEqual(self.read(cfg), cfg)
+
+    def test_invalid_jitter_settings_are_rejected(self):
+        for ratio in (True, "1", -.01, .051, float("nan")):
+            with self.subTest(ratio=ratio), self.assertRaises(ValueError):
+                validate_config(dict(DEFAULTS, click_jitter_ratio=ratio))
+
     def read(self, data):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp)/"config.json";p.write_text(json.dumps(data),encoding="utf-8")
@@ -132,3 +155,32 @@ class UpgradeTests(unittest.TestCase):
         old["profile"] = {"title": "微信", "client_size": [400, 760], "crop": [0, 0, 400, 760]}
         new = self.read(old)
         self.assertEqual(new["input_method"], "click")
+        self.assertEqual(new["emulator_type"], "wechat")
+
+    def test_new_wechat_configuration_has_observation_click_and_interval_defaults(self):
+        cfg = validate_config({"emulator_type": "wechat"})
+        self.assertTrue(cfg["dry_run"])
+        self.assertEqual(cfg["input_method"], "click")
+        self.assertEqual(cfg["min_action_interval_s"], .9)
+
+    def test_environment_switch_sets_wechat_defaults_and_restores_space(self):
+        switched = select_environment(DEFAULTS, "wechat")
+        self.assertTrue(switched["dry_run"])
+        self.assertEqual(switched["input_method"], "click")
+        self.assertEqual(switched["min_action_interval_s"], .9)
+        self.assertEqual(DEFAULTS["min_action_interval_s"], .24)
+        self.assertEqual(select_environment(switched, "mumu")["input_method"], "space")
+
+    def test_custom_intervals_and_saved_observation_choice_are_preserved(self):
+        for interval in (.3, 1.2):
+            switched = select_environment(dict(DEFAULTS, min_action_interval_s=interval), "wechat")
+            self.assertEqual(switched["min_action_interval_s"], interval)
+        cfg = dict(DEFAULTS, emulator_type="wechat", input_method="click", dry_run=False,
+                   min_action_interval_s=.2)
+        self.assertEqual(self.read(cfg), cfg)
+
+    def test_invalid_old_wechat_interval_is_reported_as_validation_error(self):
+        for interval in (None, "slow", True):
+            with self.subTest(interval=interval), self.assertRaises(ValueError):
+                self.read(dict(DEFAULTS, config_version=7, emulator_type="wechat",
+                               min_action_interval_s=interval))
