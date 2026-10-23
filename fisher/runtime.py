@@ -14,7 +14,6 @@ from .controller import Controller, Decision
 from .vision import Detector, annotate, write_image, LABELS
 from .scheduling import CaptureSchedule, Hotkeys
 from . import TRIAL_BUILD
-from .trial_capture import TrialRecorder
 from .jsonio import dumps
 from .contact import MAX_CONTACT_WAIT, MAX_TRACK_AGE
 from .speed import load_profile, save_profile, reference_profile
@@ -216,6 +215,7 @@ class Runtime:
         try:
             cv2.setNumThreads(1)
             if TRIAL_BUILD:
+                from .trial_capture import TrialRecorder
                 self.trial = TrialRecorder(DATA_ROOT, self.emit)
             detector = Detector(ROOT / "assets/templates", self.cfg["template_threshold"])
             try:

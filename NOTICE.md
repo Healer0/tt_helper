@@ -14,4 +14,4 @@ Copyright (C) 2026 zz11-m and contributors.
 
 ## 便携运行环境
 
-Windows便携包随附CPython（python-build-standalone发行）、Tcl/Tk、NumPy、OpenCV headless、Pillow及MSS。它们分别适用上游许可证；项目的GPL声明不替换第三方许可。Python许可保留在runtime/LICENSE.txt，Tcl/Tk许可在runtime/tcl中，Python依赖的许可在相应dist-info目录中，OpenCV另保留LICENSE-3RD-PARTY.txt。各组件版本、下载URL和SHA-256记录在DEPENDENCIES.json，可据此取得对应上游资料。便携包的app目录包含完整项目源码。
+Windows便携包随附CPython（python-build-standalone发行）、Tcl/Tk、NumPy、OpenCV headless、Pillow及MSS。它们分别适用上游许可证；项目的GPL声明不替换第三方许可。Python许可保留在runtime/LICENSE.txt，Tcl/Tk许可在runtime/tcl中，Python依赖的许可在相应dist-info目录中，OpenCV另保留LICENSE-3RD-PARTY.txt。各组件版本、下载URL和SHA-256记录在DEPENDENCIES.json，可据此取得对应上游资料。便携包app目录仅含运行字节码和资源，完整对应源码、测试、文档及构建脚本在同包source/tt_fish-版本号-source.zip中；解压即可查看和重建。分发便携包时须一并保留该源码归档及许可声明。

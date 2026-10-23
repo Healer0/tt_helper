@@ -2,8 +2,8 @@
 chcp 65001 >nul
 setlocal DisableDelayedExpansion
 if not exist "%~dp0runtime\pythonw.exe" goto missing
-if not exist "%~dp0app\desktop.py" goto missing
-start "" "%~dp0runtime\pythonw.exe" -I -B "%~dp0app\desktop.py" --data-dir "%~dp0data"
+if not exist "%~dp0app\desktop.pyc" goto missing
+start "" "%~dp0runtime\pythonw.exe" -I -B "%~dp0app\desktop.pyc" --data-dir "%~dp0data"
 exit /b 0
 :missing
 echo 程序文件不完整。请先将整个压缩包解压，再运行本入口。

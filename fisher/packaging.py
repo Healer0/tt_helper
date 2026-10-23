@@ -28,6 +28,19 @@ PUBLIC_FILES = (
     ".github/ISSUE_TEMPLATE/bug_report.md",
 ) + tuple(f"assets/templates/{name}.png" for name in TEMPLATE_DEFINITIONS)
 
+# 便携运行目录只保留正式版所需文件；完整源码另附归档。
+PORTABLE_FILES = (
+    "desktop.py", "main.py",
+    "fisher/__init__.py", "fisher/config.py", "fisher/controller.py", "fisher/runtime.py",
+    "fisher/wechat.py", "fisher/contact.py", "fisher/jsonio.py", "fisher/speed.py",
+    "fisher/phase.py", "fisher/templates.py", "fisher/scheduling.py", "fisher/vision.py",
+    "fisher/windows.py", "fisher/project.py", "docs/images/crop-example.png",
+) + tuple(f"assets/templates/{name}.png" for name in TEMPLATE_DEFINITIONS)
+
+
+def runtime_payloads(payloads):
+    return {name: payloads[name] for name in PORTABLE_FILES}
+
 
 class MissingPublicFileError(FileNotFoundError):
     def __init__(self, public_file):

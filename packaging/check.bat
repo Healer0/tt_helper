@@ -2,8 +2,8 @@
 chcp 65001 >nul
 setlocal DisableDelayedExpansion
 if not exist "%~dp0runtime\python.exe" goto missing
-if not exist "%~dp0app\desktop.py" goto missing
-"%~dp0runtime\python.exe" -I -B "%~dp0app\desktop.py" --check --data-dir "%~dp0data"
+if not exist "%~dp0app\desktop.pyc" goto missing
+"%~dp0runtime\python.exe" -I -B "%~dp0app\desktop.pyc" --check --data-dir "%~dp0data"
 if errorlevel 1 goto failed
 echo.
 echo 运行环境检查通过。

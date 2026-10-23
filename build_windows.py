@@ -15,7 +15,7 @@ import urllib.request
 import zipfile
 from fisher import __version__
 from fisher.config import ROOT
-from fisher.packaging import source_payloads
+from fisher.packaging import source_payloads, runtime_payloads, write_archive
 
 
 def file_hash(path):
@@ -141,7 +141,39 @@ def write_bundle(folder, destination):
         temporary.unlink(missing_ok=True)
 
 
+def compile_application(python, app, version):
+    """使用目标解释器生成同版本无源码字节码；编译全部成功后才移除临时源文件。"""
+    script = r'''
+import importlib.util
+from pathlib import Path
+import py_compile
+import sys
+app = Path(sys.argv[1]).resolve()
+expected = tuple(map(int, sys.argv[2].split('.')))
+if sys.version_info[:2] != expected:
+    raise RuntimeError('字节码编译解释器版本不匹配')
+sources = sorted(app.rglob('*.py'))
+if not sources:
+    raise RuntimeError('缺少待编译运行文件')
+for source in sources:
+    if source.is_symlink() or not source.resolve().is_relative_to(app):
+        raise ValueError('运行源文件不能是链接或越界路径')
+    py_compile.compile(str(source), cfile=str(source.with_suffix('.pyc')),
+                       dfile=source.relative_to(app).as_posix(), doraise=True,
+                       optimize=0, invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
+for source in sources:
+    if source.with_suffix('.pyc').read_bytes()[:4] != importlib.util.MAGIC_NUMBER:
+        raise RuntimeError('字节码版本校验失败')
+for source in sources:
+    source.unlink()
+'''
+    subprocess.run([str(python), "-I", "-B", "-c", script, str(Path(app).resolve()),
+                    ".".join(map(str, version))], check=True, timeout=120)
+
+
 def build(cache, output):
+    if sys.platform != "win32":
+        raise RuntimeError("精简字节码便携包需在Windows上使用随包Python构建")
     lock = json.loads((ROOT / "packaging/windows-runtime.lock.json").read_text(encoding="utf-8"))
     if lock["target"] != "windows-x86_64" or lock["schema_version"] != 1:
         raise ValueError("运行环境清单不受支持")
@@ -160,10 +192,23 @@ def build(cache, output):
         for wheel in downloads[1:]:
             unpack_wheel(wheel, runtime / "Lib/site-packages")
         validate_runtime(runtime)
-        for name, content in source_payloads().items():
+        payloads = source_payloads()
+        for name, content in runtime_payloads(payloads).items():
             path = bundle / "app" / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(content)
+        source_name = f"tt_fish-{__version__}-source.zip"
+        write_archive(bundle / "source" / source_name, payloads)
+        version = tuple(map(int, lock["python"]["version"].split(".")[:2]))
+        compile_application(runtime / "python.exe", bundle / "app", version)
+        check_imports = (
+            "import importlib,sys; sys.path.insert(0,sys.argv[1]); "
+            "mods=[importlib.import_module(n) for n in ('desktop','main','fisher.runtime')]; "
+            "assert all(m.__file__.endswith('.pyc') for m in mods); "
+            "from fisher import TRIAL_BUILD; assert not TRIAL_BUILD"
+        )
+        subprocess.run([str(runtime / "python.exe"), "-I", "-B", "-c", check_imports,
+                        str(bundle / "app")], check=True, timeout=90)
         for source, name in (("start.bat", "启动钓鱼助手.bat"), ("check.bat", "检查运行环境.bat"),
                              ("portable-readme.txt", "使用说明.txt")):
             shutil.copyfile(ROOT / "packaging" / source, bundle / name)
@@ -172,7 +217,7 @@ def build(cache, output):
         (bundle / "DEPENDENCIES.json").write_text(json.dumps(lock, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
         if sys.platform == "win32":
             with tempfile.TemporaryDirectory(prefix="tt_fish-check-") as data:
-                subprocess.run([str(runtime / "python.exe"), "-I", "-B", str(bundle / "app/desktop.py"),
+                subprocess.run([str(runtime / "python.exe"), "-I", "-B", str(bundle / "app/desktop.pyc"),
                                 "--check", "--data-dir", data], check=True, timeout=90)
         destination = output / f"tt_fish-{__version__}-Windows-x64.zip"
         write_bundle(bundle, destination)

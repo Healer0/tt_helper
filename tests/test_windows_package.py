@@ -4,16 +4,66 @@ from hashlib import sha256
 from pathlib import Path
 import tarfile
 import tempfile
+import subprocess
+import sys
 import unittest
 import uuid
 from unittest.mock import patch
 import zipfile
 import build_windows
 from fisher.config import ROOT
-from fisher.packaging import source_payloads
+from fisher.packaging import source_payloads, runtime_payloads
 
 
 class WindowsPackageTests(unittest.TestCase):
+    def test_runtime_directory_excludes_development_files_and_personal_data(self):
+        payloads = source_payloads()
+        payloads["config.json"] = b"private"
+        payloads["data/session.log"] = b"private"
+        runtime = runtime_payloads(payloads)
+        self.assertIn("desktop.py", runtime)
+        self.assertIn("fisher/runtime.py", runtime)
+        self.assertIn("docs/images/crop-example.png", runtime)
+        self.assertFalse(any(name.startswith(("tests/", ".github/", "packaging/", "data/")) for name in runtime))
+        for name in ("config.json", "build_windows.py", "selfcheck.py", "fisher/trial_capture.py", "fisher/packaging.py"):
+            self.assertNotIn(name, runtime)
+
+    def test_sourceless_bytecode_runs_and_imports_from_unicode_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app = Path(tmp) / "中文运行目录"
+            (app / "pkg").mkdir(parents=True)
+            (app / "pkg/__init__.py").write_text("value = 42\n", encoding="utf-8")
+            (app / "entry.py").write_text("import pkg\nassert pkg.value == 42\n", encoding="utf-8")
+            build_windows.compile_application(sys.executable, app, sys.version_info[:2])
+            self.assertEqual(list(app.rglob("*.py")), [])
+            self.assertEqual(len(list(app.rglob("*.pyc"))), 2)
+            code = "import sys; sys.path.insert(0,sys.argv[1]); import entry,pkg; assert pkg.value == 42; assert entry.__file__.endswith('.pyc')"
+            subprocess.run([sys.executable, "-I", "-B", "-c", code, str(app)], check=True, timeout=30)
+            self.assertNotIn(str(app).encode(), (app / "entry.pyc").read_bytes())
+
+    def test_wrong_compiler_version_preserves_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app = Path(tmp)
+            source = app / "entry.py"
+            source.write_text("value = 42\n", encoding="utf-8")
+            runner = subprocess.run
+            with patch("build_windows.subprocess.run", side_effect=lambda *args, **kw: runner(*args, **kw, capture_output=True)), \
+                 self.assertRaises(subprocess.CalledProcessError):
+                build_windows.compile_application(sys.executable, app, (sys.version_info.major, sys.version_info.minor + 1))
+            self.assertTrue(source.exists())
+            self.assertEqual(list(app.rglob("*.pyc")), [])
+
+    def test_compile_failure_does_not_remove_partially_compiled_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app = Path(tmp)
+            (app / "a.py").write_text("value = 42\n", encoding="utf-8")
+            (app / "b.py").write_text("def broken(\n", encoding="utf-8")
+            runner = subprocess.run
+            with patch("build_windows.subprocess.run", side_effect=lambda *args, **kw: runner(*args, **kw, capture_output=True)), \
+                 self.assertRaises(subprocess.CalledProcessError):
+                build_windows.compile_application(sys.executable, app, sys.version_info[:2])
+            self.assertEqual(len(list(app.rglob("*.py"))), 2)
+
     def test_valid_cache_needs_no_network(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "package.bin"
@@ -84,7 +134,7 @@ class WindowsPackageTests(unittest.TestCase):
         for name in ("start.bat", "check.bat"):
             text = (ROOT / "packaging" / name).read_text(encoding="utf-8")
             self.assertIn('"%~dp0runtime\\python', text)
-            self.assertIn(' -I -B "%~dp0app\\desktop.py"', text)
+            self.assertIn(' -I -B "%~dp0app\\desktop.pyc"', text)
             self.assertIn('--data-dir "%~dp0data"', text)
             self.assertNotIn("pip install", text)
             self.assertNotIn("powershell", text.lower())
