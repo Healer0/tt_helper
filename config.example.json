@@ -6,7 +6,7 @@
   "calibrate_speed": false,
   "speed_fraction_per_s": 0.606,
   "contact_overlap_ratio": 0.6,
-  "dry_run": true,
+  "dry_run": false,
   "continuous_fishing": true,
   "capture_every_n_frames": 6,
   "click_point": [

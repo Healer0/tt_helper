@@ -18,7 +18,7 @@ def main(show_errors=True):
     from fisher.windows import Windows
     from fisher.runtime import Runtime
     from fisher import __version__
-    from fisher.project import PROJECT_URL, BILIBILI_URL, FREE_NOTICE, open_page
+    from fisher.project import FREE_NOTICE
     from fisher.speed import load_profile,save_profile,reference_profile
     from fisher.wechat import profile_matches
 
@@ -32,8 +32,10 @@ def main(show_errors=True):
             self.hwnd = None
             self.options = []
             root.title(f"tt_fish · 钓鱼助手 {__version__}")
-            root.geometry("900x810")
-            root.minsize(860, 760)
+            width = min(1180, root.winfo_screenwidth() - 80)
+            height = min(1180, root.winfo_screenheight() - 90)
+            root.geometry(f"{width}x{height}")
+            root.minsize(min(980, width), min(960, height))
             root.protocol("WM_DELETE_WINDOW", self.close)
             style = ttk.Style()
             style.configure("TLabel", font=("Microsoft YaHei UI", 10))
@@ -41,11 +43,6 @@ def main(show_errors=True):
             footer = ttk.Frame(root, padding=(10, 5))
             footer.pack(side="bottom", fill="x")
             ttk.Label(footer, text=FREE_NOTICE, font=("Microsoft YaHei UI", 9), foreground="#555555").pack(side="left")
-            for label, url in (("哔哩哔哩主页", BILIBILI_URL), ("GitHub 项目", PROJECT_URL)):
-                link = ttk.Label(footer, text=label, foreground="#245b89", cursor="hand2", takefocus=True)
-                link.pack(side="right", padx=(12, 0))
-                link.bind("<Button-1>", lambda event, target=url: self.open_link(target))
-                link.bind("<Return>", lambda event, target=url: self.open_link(target))
             top = ttk.Frame(root, padding=10)
             top.pack(fill="x")
             ttk.Label(top, text="1. 选择微信小游戏窗口").pack(side="left")
@@ -61,37 +58,41 @@ def main(show_errors=True):
             ttk.Label(status, textvariable=self.control_status, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w")
             ttk.Label(status, textvariable=self.notice, wraplength=740, foreground="#245b89").pack(anchor="w", pady=(2,0))
             self.preview_shown = tk.BooleanVar(value=self.cfg["show_preview"])
-            self.preview_button = ttk.Button(status, text="隐藏预览" if self.preview_shown.get() else "显示预览",
+            preview_bar = ttk.Frame(status)
+            preview_bar.pack(fill="x", pady=(3, 0))
+            self.preview_button = ttk.Button(preview_bar, text="隐藏预览" if self.preview_shown.get() else "显示预览",
                                              command=self.toggle_preview)
-            self.preview_button.pack(anchor="w", pady=(3,0))
+            self.preview_button.pack(side="left")
+            ttk.Button(preview_bar, text="图文操作手册", command=self.show_manual).pack(side="right")
             content = ttk.Frame(root)
             content.pack(fill="both", expand=True)
-            canvas = tk.Canvas(content, highlightthickness=0)
-            scrollbar = ttk.Scrollbar(content, orient="vertical", command=canvas.yview)
-            scrollbar.pack(side="right", fill="y")
-            canvas.pack(side="left", fill="both", expand=True)
-            canvas.configure(yscrollcommand=scrollbar.set)
-            body = ttk.Frame(canvas, padding=(10, 0, 10, 10))
-            body_id = canvas.create_window(0, 0, anchor="nw", window=body)
-            body.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
-            canvas.bind("<Configure>", lambda event: canvas.itemconfigure(body_id, width=event.width))
+            body = ttk.Frame(content, padding=(10, 0, 10, 10))
+            body.pack(fill="both", expand=True)
             self.preview = ttk.Label(body, text="框选后显示游戏识别预览", anchor="center")
             if self.preview_shown.get():
                 self.preview.pack(side="left", fill="both", padx=(0, 12))
             panel = ttk.Frame(body)
             self.panel = panel
             panel.pack(side="left", fill="both", expand=True)
-            ttk.Button(panel, text="2. 框选完整游戏画面", command=self.prepare_crop).pack(fill="x", pady=5)
-            ttk.Label(panel, text="完整选中游戏，包括底部游戏栏；排除窗口\n标题栏、侧边工具栏及游戏外侧黑边。", wraplength=400).pack(anchor="w", pady=4)
-            ttk.Button(panel, text="查看框选示例", command=self.show_crop_example).pack(anchor="w", pady=(0, 3))
+            crop_row = ttk.Frame(panel)
+            crop_row.pack(fill="x", pady=(3, 2))
+            ttk.Button(crop_row, text="2. 框选完整游戏画面", command=self.prepare_crop).pack(side="left", fill="x", expand=True)
+            ttk.Button(crop_row, text="查看框选示例", command=self.show_crop_example).pack(side="right", padx=(8, 0))
+            ttk.Label(panel, text="选中完整游戏及底栏，排除微信标题栏、工具栏和外侧黑边。", wraplength=620).pack(anchor="w", pady=2)
             self.crop_status = tk.StringVar(value="尚未框选")
-            ttk.Label(panel, textvariable=self.crop_status, wraplength=400).pack(anchor="w", pady=4)
+            ttk.Label(panel, textvariable=self.crop_status, wraplength=620).pack(anchor="w", pady=2)
             tabs = ttk.Notebook(panel)
             tabs.pack(fill="x", pady=5)
             options = ttk.Frame(tabs, padding=8)
             settings = ttk.Frame(tabs, padding=8)
             speed_options = ttk.Frame(tabs, padding=8)
             recording = ttk.Frame(tabs, padding=8)
+            settings_columns = ttk.Frame(settings)
+            settings_columns.pack(fill="x")
+            input_settings = ttk.Frame(settings_columns)
+            input_settings.pack(side="left", fill="both", expand=True, padx=(0, 12))
+            shortcut_settings = ttk.Frame(settings_columns)
+            shortcut_settings.pack(side="left", fill="both", expand=True)
             tabs.add(options, text="钓鱼选项")
             tabs.add(settings, text="快捷键与延迟")
             tabs.add(speed_options, text="速度与校准")
@@ -119,7 +120,7 @@ def main(show_errors=True):
                 widget = ttk.Checkbutton(options, text=label, variable=var, command=cmd)
                 widget.pack(anchor="w", pady=3)
                 self.settings_widgets.append(widget)
-            ttk.Label(options, text="使用鼠标点击；位置为游戏画面比例坐标。\n预览十字线是基准点，圆圈是随机范围，请全部放在按钮内。", wraplength=440,
+            ttk.Label(options, text="比例坐标相对框选画面；预览十字线和随机圆圈应全部位于按钮内。", wraplength=620,
                       foreground="#555555").pack(anchor="w", pady=(0, 4))
             point_row = ttk.Frame(options)
             point_row.pack(fill="x", pady=3)
@@ -135,7 +136,7 @@ def main(show_errors=True):
             ttk.Button(point_row, text="画面中央", command=self.reset_click_point).pack(side="left", padx=(6, 0))
             jitter_row = ttk.Frame(options)
             jitter_row.pack(fill="x", pady=3)
-            ttk.Label(jitter_row, text="随机偏移半径（画面短边的%，0关闭）").pack(side="left")
+            ttk.Label(jitter_row, text="随机偏移半径（短边%，0关闭）").pack(side="left")
             self.click_jitter = tk.StringVar(value=f'{self.cfg["click_jitter_ratio"]*100:g}')
             jitter_entry = ttk.Entry(jitter_row, textvariable=self.click_jitter, width=5)
             jitter_entry.pack(side="right")
@@ -145,11 +146,11 @@ def main(show_errors=True):
             fields = [(options, "capture_every_n_frames", "每多少帧截图一次（1～60）"),
                       (options, "max_casts", "单次最多下钩次数"),
                       (options, "max_session_minutes", "单次最长运行（分钟）"),
-                      (settings, "input_latency_ms", "游戏响应延迟基准（毫秒）"),
-                      (settings, "click_hold_ms", "点击按下到抬起（毫秒）"),
-                      (settings, "result_wait_s", "结果动画等待（秒）"),
-                      (settings, "unknown_timeout_s", "画面未确认等待（秒；0不限）"),
-                      (settings, "timing_timeout_s", "黄条阶段等待（秒；0不限）")]
+                      (input_settings, "input_latency_ms", "响应延迟基准（毫秒）"),
+                      (input_settings, "click_hold_ms", "点击按住（毫秒）"),
+                      (input_settings, "result_wait_s", "结算等待（秒）"),
+                      (input_settings, "unknown_timeout_s", "未知画面等待（秒）"),
+                      (input_settings, "timing_timeout_s", "黄条等待（秒）")]
             self.values = {}
             self.entries = {}
             for parent, key, label in fields:
@@ -163,15 +164,15 @@ def main(show_errors=True):
                 self.entries[key] = entry
                 self.settings_widgets.append(entry)
                 if key == "capture_every_n_frames":
-                    ttk.Label(parent, text="追求响应速度可调小；电脑卡顿时调大，采样会更慢。",
-                              wraplength=440, foreground="#555555").pack(anchor="w", pady=(0, 4))
-            adaptive = ttk.Checkbutton(settings, text="自动补偿本机输入执行耗时", variable=self.adaptive)
+                    ttk.Label(parent, text="值越小采样越快；卡顿时可调大。",
+                              wraplength=620, foreground="#555555").pack(anchor="w", pady=(0, 2))
+            adaptive = ttk.Checkbutton(shortcut_settings, text="补偿本机输入耗时", variable=self.adaptive)
             adaptive.pack(anchor="w", pady=3)
             self.settings_widgets.append(adaptive)
             self.hotkey_values = {}
             for key, label in (("toggle_hotkey", "开始／暂停"), ("pause_hotkey", "紧急暂停"),
                                ("snapshot_hotkey", "保存游戏截图")):
-                row = ttk.Frame(settings)
+                row = ttk.Frame(shortcut_settings)
                 row.pack(fill="x", pady=3)
                 ttk.Label(row, text=label).pack(side="left")
                 var = tk.StringVar(value=self.cfg[key])
@@ -180,26 +181,28 @@ def main(show_errors=True):
                 combo.pack(side="right")
                 self.settings_widgets.append(combo)
             ttk.Label(settings, text=f'结果页重试间隔：{self.cfg["result_retry_s"]:g}秒 ± {self.cfg["result_retry_jitter_ms"]:g}毫秒', wraplength=490).pack(anchor="w", pady=3)
-            ttk.Label(settings, text="修改设置前请停止监测。", wraplength=490).pack(anchor="w", pady=3)
+            ttk.Label(settings, text="等待填0不限；修改设置前请停止监测。", wraplength=620).pack(anchor="w", pady=3)
             ttk.Button(recording, text="3秒后录制15秒手动操作", command=self.record).pack(fill="x", pady=5)
             ttk.Label(recording, text="先开启监测，再点击录制并切回游戏窗口。\n录制期间手动钓鱼，自动操作暂停。\n录像和时间戳保存在recordings文件夹。", wraplength=490).pack(anchor="w", pady=5)
             self.update_limits()
-            self.start_button = ttk.Button(panel, text="3. 应用设置并开启监测", command=self.start)
-            self.start_button.pack(fill="x", pady=(6,3))
-            self.launch_button = ttk.Button(panel, text="4. 3秒后启动钓鱼", command=self.launch, state="disabled")
-            self.launch_button.pack(fill="x", pady=4)
+            action_row = ttk.Frame(panel)
+            action_row.pack(fill="x", pady=(6, 4))
+            self.start_button = ttk.Button(action_row, text="3. 应用设置并开启监测", command=self.start)
+            self.start_button.pack(side="left", fill="x", expand=True)
+            self.launch_button = ttk.Button(action_row, text="4. 3秒后启动钓鱼", command=self.launch, state="disabled")
+            self.launch_button.pack(side="left", fill="x", expand=True, padx=(6, 0))
             stop_row = ttk.Frame(panel)
             stop_row.pack(fill="x", pady=4)
             ttk.Button(stop_row, text="暂停／取消启动", command=self.pause).pack(side="left", fill="x", expand=True)
             ttk.Button(stop_row, text="停止监测", command=self.stop).pack(side="left", fill="x", expand=True, padx=(6,0))
             self.hotkey_hint = tk.StringVar()
             self.update_hotkey_hint()
-            ttk.Label(panel, textvariable=self.hotkey_hint, wraplength=490).pack(anchor="w", pady=5)
-            ttk.Label(panel, text="游戏窗口失去焦点后自动暂停。", wraplength=490).pack(anchor="w", pady=3)
+            ttk.Label(panel, textvariable=self.hotkey_hint, wraplength=620).pack(anchor="w", pady=3)
+            ttk.Label(panel, text="失焦自动暂停；切回游戏后明确启动才恢复。", wraplength=620).pack(anchor="w", pady=2)
             self.state = tk.StringVar(value="等待设置")
             self.detail = tk.StringVar(value="输入点应同时覆盖钓鱼按钮与“开心收下”。")
-            ttk.Label(panel, textvariable=self.state, wraplength=400, font=("Microsoft YaHei UI", 11, "bold")).pack(anchor="w", pady=(7,3))
-            ttk.Label(panel, textvariable=self.detail, wraplength=400).pack(anchor="w", pady=3)
+            ttk.Label(panel, textvariable=self.state, wraplength=620, font=("Microsoft YaHei UI", 11, "bold")).pack(anchor="w", pady=(5, 2))
+            ttk.Label(panel, textvariable=self.detail, wraplength=620).pack(anchor="w", pady=2)
             self.refresh()
             root.after(50, self.poll)
 
@@ -231,13 +234,19 @@ def main(show_errors=True):
             except OSError as exc:
                 self.notice.set(f"无法保存预览设置：{exc}")
 
-        def open_link(self, url):
+        def show_manual(self):
+            from fisher.config import ROOT
+            import webbrowser
             if self.runtime:
                 self.runtime.command("pause")
             try:
-                open_page(url)
+                candidates = (ROOT / "docs/USER_GUIDE.html", ROOT.parent / "图文操作手册.html")
+                path = next((path for path in candidates if path.is_file()), None)
+                if path is None:
+                    raise OSError("未找到图文操作手册，请重新完整解压发布包。")
+                webbrowser.open(path.resolve().as_uri())
             except (OSError, ValueError) as exc:
-                messagebox.showerror("无法打开链接", str(exc))
+                messagebox.showerror("无法打开操作手册", str(exc))
 
         def show_crop_example(self):
             from fisher.config import ROOT

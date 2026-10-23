@@ -212,6 +212,7 @@ def build(cache, output):
         for source, name in (("start.bat", "启动钓鱼助手.bat"), ("check.bat", "检查运行环境.bat"),
                              ("portable-readme.txt", "使用说明.txt")):
             shutil.copyfile(ROOT / "packaging" / source, bundle / name)
+        (bundle / "图文操作手册.html").write_bytes(payloads["docs/USER_GUIDE.html"])
         shutil.copyfile(ROOT / "LICENSE", bundle / "LICENSE")
         shutil.copyfile(ROOT / "NOTICE.md", bundle / "NOTICE.md")
         (bundle / "DEPENDENCIES.json").write_text(json.dumps(lock, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")

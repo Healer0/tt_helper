@@ -16,7 +16,7 @@ DEFAULTS = {
     "config_version": CONFIG_VERSION,
     "timing_mode": "phase", "adaptive_latency": True, "show_preview": False,
     "calibrate_speed": False, "speed_fraction_per_s": DEFAULT_SPEED, "contact_overlap_ratio": .60,
-    "dry_run": True, "continuous_fishing": True,
+    "dry_run": False, "continuous_fishing": True,
     "capture_every_n_frames": 6,
     "click_point": [0.5, 0.5], "click_hold_ms": 30,
     "click_jitter_ratio": 0.015,

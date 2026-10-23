@@ -24,7 +24,7 @@ PUBLIC_FILES = (
     "packaging/windows-runtime.lock.json", "packaging/start.bat", "packaging/check.bat",
     "packaging/portable-readme.txt", "docs/WINDOWS.md",
     ".github/workflows/windows-portable.yml",
-    "docs/DEVELOPMENT.md", "docs/PRIVACY.md", "docs/images/crop-example.png",
+    "docs/DEVELOPMENT.md", "docs/PRIVACY.md", "docs/images/crop-example.png", "docs/USER_GUIDE.html",
     ".github/ISSUE_TEMPLATE/bug_report.md",
 ) + tuple(f"assets/templates/{name}.png" for name in TEMPLATE_DEFINITIONS)
 

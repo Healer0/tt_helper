@@ -54,11 +54,11 @@ class WechatConfigTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text(encoding="utf-8")), data)
             return result
 
-    def test_new_defaults_are_observation_and_click_only(self):
+    def test_new_defaults_allow_clicks_but_startup_is_explicit(self):
         cfg = validate_config({})
         self.assertEqual(cfg, DEFAULTS)
         self.assertEqual(cfg["config_version"], 10)
-        self.assertTrue(cfg["dry_run"])
+        self.assertFalse(cfg["dry_run"])
         self.assertEqual(cfg["min_action_interval_s"], .9)
         for key in ("emulator_type", "input_method", "key_hold_ms", "capture_backend"):
             self.assertNotIn(key, cfg)
