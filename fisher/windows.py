@@ -6,7 +6,7 @@ import sys
 import time
 import math
 import random
-from .emulators import WECHAT_PROCESSES, select_windows, title_family
+from .wechat import is_wechat_process, select_windows
 
 def enable_dpi_awareness():
     if sys.platform != "win32":
@@ -19,7 +19,7 @@ def enable_dpi_awareness():
         except (AttributeError, OSError):
             C.windll.user32.SetProcessDPIAware()
 
-# INPUT必须保留完整union；仅定义KEYBDINPUT会导致64位结构尺寸错误。
+# Win32 INPUT保留完整union以确保ABI尺寸；键盘结构不提供键盘注入功能。
 UPTR = C.c_size_t
 class KEYBDINPUT(C.Structure):
     _fields_ = [("wVk", T.WORD), ("wScan", T.WORD), ("dwFlags", T.DWORD), ("time", T.DWORD), ("dwExtraInfo", UPTR)]
@@ -91,7 +91,7 @@ def jittered_click_point(box, x_norm, y_norm, ratio, previous=None, rng=None):
 class Windows:
     def __init__(self):
         if sys.platform != "win32":
-            raise RuntimeError("自动按键和实时截图入口需要Windows；离线回放可在其他系统运行")
+            raise RuntimeError("微信鼠标点击和实时截图入口需要Windows；离线回放可在其他系统运行")
         self.u = C.WinDLL("user32", use_last_error=True)
         self.u.GetForegroundWindow.argtypes = []
         self.u.GetForegroundWindow.restype = T.HWND
@@ -121,7 +121,7 @@ class Windows:
         self.k.QueryFullProcessImageNameW.restype = T.BOOL
         self.k.CloseHandle.argtypes = [T.HANDLE]
         self.k.CloseHandle.restype = T.BOOL
-        self.owns_space = False
+        self.owns_mouse = False
         self.last_click_at = None
         self.last_click_position = None
         expected = 40 if C.sizeof(C.c_void_p) == 8 else 28
@@ -151,9 +151,9 @@ class Windows:
         finally:
             self.k.CloseHandle(handle)
 
-    def windows(self, emulator_type="ldplayer", include_other=False):
+    def windows(self):
         found = []
-        families = {}
+        processes = {}
         @self.callback_type
         def callback(hwnd, param):
             title = self.title(hwnd)
@@ -162,14 +162,12 @@ class Windows:
                     box = self.client_box(hwnd)
                     if box[2] > 100 and box[3] > 100:
                         found.append((int(hwnd), title))
-                        if (emulator_type == "wechat" and title_family(title) != "wechat"
-                                and self.process_name(hwnd).casefold() in WECHAT_PROCESSES):
-                            families[int(hwnd)] = "wechat"
+                        processes[int(hwnd)] = self.process_name(hwnd)
                 except OSError:
                     pass
             return True
         self.u.EnumWindows(callback, 0)
-        return select_windows(found, emulator_type, include_other, families)
+        return select_windows(found, processes)
 
     def client_box(self, hwnd):
         rect, pt = T.RECT(), T.POINT(0, 0)
@@ -180,7 +178,8 @@ class Windows:
         return pt.x, pt.y, rect.right-rect.left, rect.bottom-rect.top
 
     def foreground_matches(self, hwnd):
-        return self.u.GetAncestor(self.u.GetForegroundWindow(), 2) == hwnd
+        return (self.u.GetAncestor(self.u.GetForegroundWindow(), 2) == hwnd
+                and is_wechat_process(self.process_name(hwnd)))
 
     def virtual_screen(self):
         # SM_XVIRTUALSCREEN=76, SM_YVIRTUALSCREEN=77, SM_CXVIRTUALSCREEN=78, SM_CYVIRTUALSCREEN=79
@@ -190,53 +189,16 @@ class Windows:
         # 使用高位当前状态，避免依赖不可靠的“自上次调用后按过”低位。
         return bool(self.u.GetAsyncKeyState(key) & 0x8000)
 
-    def _send(self, up=False):
-        inp = INPUT(type=1, ki=KEYBDINPUT(0, 0x39, 0x0008 | (0x0002 if up else 0), 0, 0))
-        if self.u.SendInput(1, C.byref(inp), C.sizeof(INPUT)) != 1:
-            raise OSError("空格输入失败。请确认窗口在前台、程序与模拟器权限一致，且映射已生效")
-
     def release(self):
-        if self.owns_space:
-            # 失焦时仍释放本程序按下的空格，避免按键卡住；不产生新的keydown。
-            self._send(up=True)
-            self.owns_space = False
+        if getattr(self, "owns_mouse", False):
+            up = INPUT(type=0, mi=MOUSEINPUT(0, 0, 0, MOUSE_LEFTUP, 0, 0))
+            if self.u.SendInput(1, C.byref(up), C.sizeof(INPUT)) != 1:
+                raise OSError("鼠标点击失败（抬起）")
+            self.owns_mouse = False
             self.last_key_up_at = time.perf_counter()
 
-    def tap_space(self, hwnd, hold_ms, cancelled, guard=None):
-        self.interrupted = False
-        self.last_key_down_at = self.last_key_up_at = None
-        self.last_send_begin = self.last_send_end = None
-        if cancelled() or not self.foreground_matches(hwnd) or (guard and not guard()):
-            return False
-        if any(self.key_down(k) for k in (0x10, 0x11, 0x12, 0x5B, 0x5C, 0x20)):
-            raise OSError("检测到手动空格或修饰键按下，自动操作已暂停")
-        # 系统查询也可能遇到调度卡顿；在注入前复核取消、焦点和截图时效。
-        if cancelled() or not self.foreground_matches(hwnd) or (guard and not guard()):
-            return False
-        try:
-            self.last_send_begin = time.perf_counter()
-            self._send()
-            self.last_send_end = time.perf_counter()
-            self.last_key_down_at = (self.last_send_begin+self.last_send_end)/2
-            self.owns_space = True
-            # 已阻塞的系统调用结束后尽快释放，避免再叠加一次完整按住时间。
-            blocked=self.last_send_end-self.last_send_begin>.050
-            deadline = time.perf_counter()+(0 if blocked else hold_ms/1000)
-            while time.perf_counter() < deadline:
-                if cancelled() or not self.foreground_matches(hwnd):
-                    self.interrupted = True
-                    break
-                time.sleep(.002)
-            return True
-        finally:
-            self.release()
-
     def click_at(self, hwnd, box, x_norm, y_norm, hold_ms, cancelled, guard=None, *, jitter_ratio=0):
-        """在游戏画面内归一化位置发送一次短按点击；守卫顺序与tap_space一致。
-
-        fire-and-forget：不维护owns_space，按下/抬起在同一调用内完成，
-        hold_ms只作为按下到抬起的间隔；异常时也保证发送抬起，不遗留按住状态。
-        """
+        """在微信游戏画面内点击；按下与抬起在同一调用完成，异常时尝试释放。"""
         self.interrupted = False
         self.last_key_down_at = self.last_key_up_at = None
         self.last_send_begin = self.last_send_end = None
@@ -250,7 +212,6 @@ class Windows:
             raise OSError("检测到手动鼠标按键按下，自动操作已暂停")
         if cancelled() or not self.foreground_matches(hwnd) or (guard and not guard()):
             return False
-        down_sent = False
         try:
             x_px, y_px = jittered_click_point(box, x_norm, y_norm, jitter_ratio,
                                              getattr(self, "last_click_position", None))
@@ -258,7 +219,6 @@ class Windows:
             ax, ay = absolute_mouse_coords(x_px, y_px, vx, vy, vw, vh)
             move = INPUT(type=0, mi=MOUSEINPUT(ax, ay, 0, MOUSE_MOVE | MOUSE_ABSOLUTE | MOUSE_VIRTUALDESK, 0, 0))
             down = INPUT(type=0, mi=MOUSEINPUT(0, 0, 0, MOUSE_LEFTDOWN, 0, 0))
-            up = INPUT(type=0, mi=MOUSEINPUT(0, 0, 0, MOUSE_LEFTUP, 0, 0))
             # 虚拟屏幕查询也可能阻塞，坐标准备完成后再次验证期限和目标。
             if cancelled() or not self.foreground_matches(hwnd) or (guard and not guard()):
                 return False
@@ -267,11 +227,12 @@ class Windows:
             self.last_send_end = time.perf_counter()
             if sent != 2:
                 raise OSError("鼠标点击失败（移动+按下）。请确认目标游戏在前台，且双方权限一致")
-            down_sent = True
+            self.owns_mouse = True
             self.last_click_position = (x_px, y_px)
             self.last_key_down_at = (self.last_send_begin + self.last_send_end) / 2
             self.last_click_at = self.last_key_down_at
-            deadline = time.perf_counter() + max(0, hold_ms) / 1000
+            blocked = self.last_send_end - self.last_send_begin > .050
+            deadline = time.perf_counter() + (0 if blocked else max(0, hold_ms) / 1000)
             while time.perf_counter() < deadline:
                 if cancelled() or not self.foreground_matches(hwnd):
                     self.interrupted = True
@@ -280,7 +241,4 @@ class Windows:
             return True
         finally:
             # 按下确已发出时保证抬起，避免按钮卡在按住状态；未按下则不误发UP。
-            if down_sent:
-                if self.u.SendInput(1, C.byref(up), C.sizeof(INPUT)) != 1:
-                    raise OSError("鼠标点击失败（抬起）")
-                self.last_key_up_at = time.perf_counter()
+            self.release()

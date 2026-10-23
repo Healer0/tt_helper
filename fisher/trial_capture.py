@@ -17,8 +17,8 @@ from .packaging import PUBLIC_FILES, MissingPublicFileError, source_payloads
 from .config import ROOT
 from .jsonio import dumps
 
-CONFIG_KEYS = ("timing_mode", "input_method", "click_hold_ms", "click_jitter_ratio", "adaptive_latency", "calibrate_speed", "speed_fraction_per_s", "contact_overlap_ratio", "capture_every_n_frames", "input_latency_ms",
-               "key_hold_ms", "continuous_fishing", "dry_run", "show_preview", "template_threshold",
+CONFIG_KEYS = ("timing_mode", "click_hold_ms", "click_jitter_ratio", "adaptive_latency", "calibrate_speed", "speed_fraction_per_s", "contact_overlap_ratio", "capture_every_n_frames", "input_latency_ms",
+               "continuous_fishing", "dry_run", "show_preview", "template_threshold",
                "min_action_interval_s", "unknown_timeout_s", "timing_timeout_s", "toggle_hotkey", "pause_hotkey", "snapshot_hotkey")
 GUIDE = """# 比例速度与入条判定诊断数据
 
@@ -32,7 +32,7 @@ frame含336×598归一化坐标、鱼漂左右边缘、完整目标缓存、当�
 input区分计划时刻、输入调用与SendInput返回附近的按下时刻、释放时刻及是否发送成功。
 frame_seq关联输入依据；last_hit_seq及since_hit_ms关联后续帧。feedback与observed_transition
 分别记录稳定目标变化、重试解锁与图像状态变化，不等于游戏内部命中回执。
-external_space只记录测试运行且模拟器在前台时、自身注入窗口之外观察到的空格边沿，
+external_space只记录测试运行且微信游戏在前台时、自身点击窗口之外观察到的手动空格边沿，
 可能漏掉短按和鼠标操作，不能作为无人干预的证明；不记录其他普通按键。
 按下时刻只说明本机输入注入，不等于游戏实际接收或命中。
 fish_id按确认的判定阶段计数，round_id按清楚可见的黄条变化计数；无法观察的阶段不补造。

@@ -6,7 +6,7 @@ from ctypes import wintypes as T
 import math
 import time
 
-from fisher.emulators import WECHAT_PROCESSES, title_family
+from fisher.wechat import is_wechat_process
 from fisher.windows import Windows
 
 
@@ -47,7 +47,7 @@ class DiagnosticWindows(Windows):
 
 
 def is_wechat(info):
-    return title_family(info["title"]) == "wechat" or info["process"].casefold() in WECHAT_PROCESSES
+    return is_wechat_process(info["process"])
 
 
 def resolve_target(win, hwnd=0):

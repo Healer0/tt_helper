@@ -174,47 +174,4 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.c.cast_count,0)
         self.assertTrue(self.c.step(Observation("WAIT",1),100+16*60).pause)
 
-class InputGuardTests(unittest.TestCase):
-    def instance(self,foreground=True):
-        from fisher.windows import Windows
-        win=Windows.__new__(Windows)
-        win.foreground_matches=lambda hwnd:foreground
-        win.key_down=lambda key:False
-        win.owns_space=False
-        win.events=[]
-        win._send=lambda up=False:win.events.append("up" if up else "down")
-        return win
-
-    def test_no_input_without_focus(self):
-        win=self.instance(False)
-        self.assertFalse(win.tap_space(1,10,lambda:False))
-        self.assertEqual(win.events,[])
-
-    def test_no_input_when_cancelled_or_geometry_changes(self):
-        for cancel,guard in ((True,True),(False,False)):
-            win=self.instance()
-            self.assertFalse(win.tap_space(1,10,lambda:cancel,lambda:guard))
-            self.assertEqual(win.events,[])
-
-    def test_key_released_after_press(self):
-        win=self.instance()
-        self.assertTrue(win.tap_space(1,10,lambda:False))
-        self.assertEqual(win.events,["down","up"])
-        self.assertFalse(win.owns_space)
-
-    def test_manual_modifiers_pause_input(self):
-        win=self.instance()
-        win.key_down=lambda key:key==0x11
-        with self.assertRaises(OSError): win.tap_space(1,10,lambda:False)
-        self.assertEqual(win.events,[])
-
-    def test_emergency_during_hold_releases_and_marks_interruption(self):
-        win=self.instance()
-        polls=[False, False, True]
-        def cancelled():
-            return polls.pop(0) if polls else True
-        self.assertTrue(win.tap_space(1,35,cancelled))
-        self.assertEqual(win.events,["down","up"])
-        self.assertTrue(win.interrupted)
-
 if __name__ == "__main__": unittest.main()

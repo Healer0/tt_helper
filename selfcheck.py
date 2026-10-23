@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""直接运行即可检查样例识别、状态决策和输入保护；不控制模拟器。"""
+"""直接运行即可检查样例识别、状态决策和输入保护；不发送系统输入。"""
 import sys
 import unittest
 from pathlib import Path

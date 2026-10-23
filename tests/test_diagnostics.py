@@ -124,9 +124,9 @@ class DiagnosticTests(unittest.TestCase):
 
     def test_late_last_guard_skips_without_spurious_pause(self):
         class SlowWindow(Window):
-            def tap_space(self,hwnd,hold,cancel,guard):
+            def click_at(self,hwnd,box,x,y,hold,cancel,guard,*,jitter_ratio=0):
                 self.clock[0] += .05
-                return super().tap_space(hwnd,hold,cancel,guard)
+                return super().click_at(hwnd,box,x,y,hold,cancel,guard,jitter_ratio=jitter_ratio)
         win=SlowWindow()
         win.clock=[1.0]
         runtime=Runtime(win,1,{"client_size":[336,598],"crop":[0,0,336,598]},DEFAULTS)

@@ -46,7 +46,7 @@ class ContactTests(unittest.TestCase):
                         self.assertIsNotNone(hit)
 
     def test_next_round_keeps_velocity_and_position_history(self):
-        m = ContactModel(DEFAULTS,DeliveryLatency(40))
+        m = ContactModel(dict(DEFAULTS,min_action_interval_s=.24),DeliveryLatency(40))
         for t in (0,.1,.2):
             m.step(observation(100+100*t,(210,220)),t,t)
         self.assertAlmostEqual(m.motion.velocity,100)

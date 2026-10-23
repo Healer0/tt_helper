@@ -13,14 +13,14 @@ def main(show_errors=True):
     import queue
     import mss
     from PIL import Image, ImageTk
-    from fisher.config import load_config, save_config, validate_config, select_environment, HOTKEYS
+    from fisher.config import load_config, save_config, validate_config, HOTKEYS
     from fisher.config import DATA_ROOT
     from fisher.windows import Windows
     from fisher.runtime import Runtime
     from fisher import __version__
     from fisher.project import PROJECT_URL, BILIBILI_URL, FREE_NOTICE, open_page
     from fisher.speed import load_profile,save_profile,reference_profile
-    from fisher.emulators import EMULATORS, profile_matches
+    from fisher.wechat import profile_matches
 
     class App:
         def __init__(self, root):
@@ -48,19 +48,11 @@ def main(show_errors=True):
                 link.bind("<Return>", lambda event, target=url: self.open_link(target))
             top = ttk.Frame(root, padding=10)
             top.pack(fill="x")
-            ttk.Label(top, text="1. 选择运行环境").pack(side="left")
-            self.emulator = tk.StringVar(value=EMULATORS[self.cfg["emulator_type"]])
-            self.emulator_combo = ttk.Combobox(top, textvariable=self.emulator,
-                                               values=tuple(EMULATORS.values()), state="readonly", width=12)
-            self.emulator_combo.pack(side="left", padx=(8, 0))
-            self.emulator_combo.bind("<<ComboboxSelected>>", self.change_emulator)
+            ttk.Label(top, text="1. 选择微信小游戏窗口").pack(side="left")
             self.combo = ttk.Combobox(top, state="readonly", width=30)
             self.combo.pack(side="left", padx=8, fill="x", expand=True)
             ttk.Button(top, text="刷新", command=self.refresh).pack(side="right")
             self.combo.bind("<<ComboboxSelected>>", self.bind_window)
-            self.include_other = tk.BooleanVar(value=False)
-            self.other_windows = ttk.Checkbutton(top, text="显示其他窗口", variable=self.include_other, command=self.refresh)
-            self.other_windows.pack(side="right", padx=(0, 8))
             # 顶部固定显示运行状态与暂停原因，避免提示挤出窗口底部。
             status = ttk.Frame(root, padding=(12, 0, 12, 8))
             status.pack(fill="x")
@@ -127,16 +119,7 @@ def main(show_errors=True):
                 widget = ttk.Checkbutton(options, text=label, variable=var, command=cmd)
                 widget.pack(anchor="w", pady=3)
                 self.settings_widgets.append(widget)
-            self.input_method = tk.StringVar(value=self.cfg["input_method"])
-            input_row = ttk.Frame(options)
-            input_row.pack(fill="x", pady=3)
-            ttk.Label(input_row, text="输入方式").pack(side="left")
-            for text, value in (("空格", "space"), ("鼠标点击", "click")):
-                radio = ttk.Radiobutton(input_row, text=text, variable=self.input_method,
-                                        value=value, command=self.update_click_entries)
-                radio.pack(side="left", padx=(8, 0))
-                self.settings_widgets.append(radio)
-            ttk.Label(options, text="微信小游戏请选“鼠标点击”；位置为画面比例坐标。\n预览十字线是基准点，圆圈是随机范围，请全部放在按钮内。", wraplength=440,
+            ttk.Label(options, text="使用鼠标点击；位置为游戏画面比例坐标。\n预览十字线是基准点，圆圈是随机范围，请全部放在按钮内。", wraplength=440,
                       foreground="#555555").pack(anchor="w", pady=(0, 4))
             point_row = ttk.Frame(options)
             point_row.pack(fill="x", pady=3)
@@ -280,7 +263,7 @@ def main(show_errors=True):
                 self.entries[key].configure(state="disabled" if disabled else "normal")
 
         def update_click_entries(self):
-            state = "disabled" if self.runtime or self.input_method.get() != "click" else "normal"
+            state = "disabled" if self.runtime else "normal"
             for entry in self.click_entries:
                 entry.configure(state=state)
 
@@ -296,25 +279,9 @@ def main(show_errors=True):
             for widget in self.settings_widgets:
                 widget.configure(state="disabled" if locked else ("readonly" if isinstance(widget, ttk.Combobox) else "normal"))
             self.combo.configure(state="disabled" if locked else "readonly")
-            self.emulator_combo.configure(state="disabled" if locked else "readonly")
-            self.other_windows.configure(state="disabled" if locked else "normal")
             self.start_button.configure(state="disabled" if locked else "normal")
             self.update_limits()
             self.update_click_entries()
-
-        def selected_emulator(self):
-            return next(key for key, label in EMULATORS.items() if label == self.emulator.get())
-
-        def change_emulator(self, event=None):
-            if self.runtime:
-                return
-            self.cfg["dry_run"] = self.dry.get()
-            self.cfg = select_environment(self.cfg, self.selected_emulator())
-            self.dry.set(self.cfg["dry_run"])
-            self.input_method.set(self.cfg["input_method"])
-            self.update_click_entries()
-            self.include_other.set(False)
-            self.refresh()
 
         def refresh(self):
             if self.runtime:
@@ -325,7 +292,7 @@ def main(show_errors=True):
             self.crop_status.set("尚未框选")
             self.preview.configure(image="", text="框选后显示游戏识别预览")
             self.preview.image = None
-            self.options = self.win.windows(self.selected_emulator(), self.include_other.get())
+            self.options = self.win.windows()
             self.combo["values"] = [f"{title}  [窗口 {hwnd}]" for hwnd,title in self.options]
             self.combo.set("")
             if self.options:
@@ -335,9 +302,9 @@ def main(show_errors=True):
                     index = next((i for i, (_, title) in enumerate(self.options) if title == old_title), 0)
                 self.combo.current(index)
                 self.bind_window()
-                self.notice.set("选择游戏窗口并框选完整游戏画面。自定义窗口名可勾选“显示其他窗口”。")
+                self.notice.set("选择微信小游戏窗口并框选完整游戏画面。")
             else:
-                self.notice.set("未找到所选游戏窗口。请启动后刷新；自定义窗口名可勾选“显示其他窗口”。")
+                self.notice.set("未找到微信游戏窗口。请在微信中打开小游戏后刷新。")
 
         def bind_window(self, event=None):
             if self.runtime:
@@ -350,7 +317,7 @@ def main(show_errors=True):
             old = self.cfg.get("profile")
             try:
                 box = self.win.client_box(self.hwnd)
-                if profile_matches(old, self.selected_emulator(), title, box[2:]):
+                if profile_matches(old, box[2:]):
                     self.profile = old
             except OSError:
                 pass
@@ -367,7 +334,7 @@ def main(show_errors=True):
 
         def crop(self):
             try:
-                crop_hwnd, crop_emulator = self.hwnd, self.selected_emulator()
+                crop_hwnd = self.hwnd
                 if not self.win.foreground_matches(self.hwnd):
                     raise ValueError("所选游戏窗口不在前台，请重新框选并在3秒内切回游戏窗口")
                 left, top, w, h = self.win.client_box(self.hwnd)
@@ -407,12 +374,11 @@ def main(show_errors=True):
                     if cw < 200 or ch < 350 or not .35 <= cw/ch <= .85:
                         messagebox.showerror("范围不合适", "请框选完整竖屏游戏画面，包括底部游戏栏，排除外侧黑边。", parent=win)
                         return
-                    if self.hwnd != crop_hwnd or self.selected_emulator() != crop_emulator:
+                    if self.hwnd != crop_hwnd:
                         messagebox.showerror("窗口已改变", "请重新框选当前窗口。", parent=win)
                         return
                     self.profile = {"title":self.win.title(crop_hwnd),"client_size":[w,h],"crop":[x,y,cw,ch],
-                                    "emulator_type":crop_emulator}
-                    self.cfg["emulator_type"] = crop_emulator
+                                    "platform":"wechat"}
                     self.cfg["profile"] = self.profile
                     save_config(self.cfg)
                     self.crop_status.set(f"已框选 {cw}×{ch}；窗口大小变化后需要重新框选")
@@ -432,17 +398,12 @@ def main(show_errors=True):
                 return
             try:
                 cfg = dict(self.cfg)
-                cfg["emulator_type"] = self.selected_emulator()
                 cfg["dry_run"] = self.dry.get()
                 cfg["continuous_fishing"] = self.continuous.get()
                 cfg["timing_mode"] = "phase"
                 cfg["adaptive_latency"] = self.adaptive.get()
                 cfg["calibrate_speed"] = self.calibrate.get()
                 cfg["show_preview"] = self.preview_shown.get()
-                cfg["input_method"] = self.input_method.get()
-                if self.selected_emulator() == "wechat" and cfg["input_method"] != "click":
-                    # 微信小游戏按触控设计，目前仅支持鼠标点击。
-                    cfg["input_method"] = "click"
                 cfg["click_point"] = [float(self.click_x.get()), float(self.click_y.get())]
                 cfg["click_jitter_ratio"] = float(self.click_jitter.get()) / 100
                 for key,var in self.values.items():
@@ -467,7 +428,7 @@ def main(show_errors=True):
             if self.runtime:
                 self.runtime.stop.set()
                 self.launch_button.configure(state="disabled")
-                self.notice.set("正在停止监测并释放按键…")
+                self.notice.set("正在停止监测并释放鼠标…")
 
         def launch(self):
             if self.runtime and not self.runtime.stop.is_set():
@@ -480,10 +441,8 @@ def main(show_errors=True):
         def update_control(self, data):
             if data["dry_run"]:
                 mode = "只观察，不发送输入"
-            elif data.get("input_method") == "click":
-                mode = "自动点击"
             else:
-                mode = "自动按空格"
+                mode = "自动点击"
             phase = "等待3秒启动" if data.get("pending") else ("运行中" if data["active"] else "已暂停")
             self.control_status.set(f"{mode} · {phase}")
 

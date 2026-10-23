@@ -25,12 +25,10 @@ def timestamp():
 class Runtime:
     def __init__(self, win, hwnd, profile, cfg):
         self.win, self.hwnd, self.profile, self.cfg = win, hwnd, profile, dict(cfg)
-        self.input_method = cfg.get("input_method", "space")
         self.click_point_norm = tuple(cfg.get("click_point", (0.5, 0.5)))
         self.click_jitter_ratio = cfg.get("click_jitter_ratio", .015)
         self.click_hold_ms = cfg.get("click_hold_ms", 30)
-        self.capture_backend = cfg.get("capture_backend", "mss")
-        self.action_word = "点击" if self.input_method == "click" else "按空格"
+        self.action_word = "点击"
         self.commands = queue.Queue()
         self.messages = queue.Queue(maxsize=8)
         self.stop = threading.Event()
@@ -115,7 +113,7 @@ class Runtime:
     def publish_control(self):
         self.emit("control", {"active": self.active, "pending": self.pending_start_at is not None,
                               "dry_run": self.cfg["dry_run"], "reason": self.pause_reason,
-                              "input_method": self.input_method})
+                              "input_method": "click"})
 
     def activate(self, controller, now):
         self.controller=controller
@@ -217,8 +215,6 @@ class Runtime:
         component, exit_cause = "startup", "stop"
         try:
             cv2.setNumThreads(1)
-            if self.capture_backend != "mss":
-                raise OSError("capture_backend 目前仅支持 mss；dxcam 后端待 PoC 验证后接入")
             if TRIAL_BUILD:
                 self.trial = TrialRecorder(DATA_ROOT, self.emit)
             detector = Detector(ROOT / "assets/templates", self.cfg["template_threshold"])
@@ -359,7 +355,7 @@ class Runtime:
                                     "continuous": self.cfg["continuous_fishing"],
                                     "casts": controller.cast_count, "results": controller.result_count}
                             preview = annotate(frame, obs, d.predicted_x) if self.preview_enabled.is_set() else None
-                            if preview is not None and self.input_method == "click":
+                            if preview is not None:
                                 # 叠加点击目标十字线，便于核对点击位置是否落在可点击区域。
                                 cx = int(round(self.click_point_norm[0]*(preview.shape[1]-1)))
                                 cy = int(round(self.click_point_norm[1]*(preview.shape[0]-1)))
@@ -462,12 +458,9 @@ class Runtime:
                 elif contact and decision.valid_until is None and at-requested_at > .012:
                     skipped = "late_dispatch"
                 return skipped is None and geometry_matches
-            if self.input_method == "click":
-                sent = self.win.click_at(self.hwnd, box, *self.click_point_norm,
-                                         self.click_hold_ms, self.input_cancelled, guard,
-                                         jitter_ratio=self.click_jitter_ratio)
-            else:
-                sent = self.win.tap_space(self.hwnd, self.cfg["key_hold_ms"], self.input_cancelled, guard)
+            sent = self.win.click_at(self.hwnd, box, *self.click_point_norm,
+                                     self.click_hold_ms, self.input_cancelled, guard,
+                                     jitter_ratio=self.click_jitter_ratio)
         if self.trial:
             self.trial.input(decision.action, requested_at, self.win, sent, skipped)
         if sent:
@@ -524,7 +517,7 @@ class Runtime:
         if not (self.active and self.trial and self.trial.current is not None):
             return
         released = getattr(self.win, "last_key_up_at", None)
-        if getattr(self.win, "owns_space", False) or (released is not None and now-released < .080):
+        if getattr(self.win, "owns_mouse", False) or (released is not None and now-released < .080):
             return
         down = bool(self.win.key_down(0x20))
         if down != self.external_space_down:

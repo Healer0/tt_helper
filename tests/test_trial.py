@@ -18,7 +18,7 @@ from fisher.packaging import MissingPublicFileError
 from test_contact import observation
 
 # 历史策略回归显式使用其原始配置；正式默认策略见test_phase。
-DEFAULTS = dict(DEFAULTS,timing_mode="contact",capture_every_n_frames=6)
+DEFAULTS = dict(DEFAULTS,timing_mode="contact",capture_every_n_frames=6,dry_run=False)
 
 
 class Window:
@@ -30,7 +30,7 @@ class Window:
     def foreground_matches(self,hwnd): return True
     def client_box(self,hwnd): return (0,0,336,598)
     def release(self): pass
-    def tap_space(self,hwnd,hold,cancel,guard):
+    def click_at(self,hwnd,box,x,y,hold,cancel,guard,*,jitter_ratio=0):
         if cancel() or not guard(): return False
         self.taps += 1
         self.last_send_begin = self.last_key_down_at = time.perf_counter()

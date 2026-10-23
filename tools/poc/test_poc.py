@@ -20,8 +20,9 @@ from tools.poc import common, poc_capture, poc_click, poc_launch, poc_windows
 
 class FakeWindow:
     click_at = Windows.click_at
+    release = Windows.release
     interrupted = False
-    owns_space = False
+    owns_mouse = False
 
     def __init__(self):
         self.foreground = 10
@@ -48,6 +49,10 @@ class FakeWindow:
 
 
 class PocTests(unittest.TestCase):
+    def test_wechat_title_does_not_allow_input_to_another_process(self):
+        self.assertFalse(common.is_wechat(dict(title="微信小游戏",process="chrome.exe")))
+        self.assertTrue(common.is_wechat(dict(title="塔塔冒险队",process="WeChatAppEx.exe")))
+
     def args(self, **kwargs):
         return SimpleNamespace(**dict(dict(hwnd=0, n=1, x=.5, y=.5, hold=10, countdown=5), **kwargs))
 

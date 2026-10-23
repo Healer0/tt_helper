@@ -104,11 +104,11 @@ class ArrivalTests(unittest.TestCase):
         for t in (0,.1,61): d=c.step(sample(100),t)
         self.assertEqual(d.pause_code,"timing_timeout")
 
-    def test_old_default_timeout_migrates_but_custom_choice_is_preserved(self):
+    def test_wechat_timeout_choices_are_preserved(self):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp)/"config.json"
-            for old,expected in ((12,60),(30,30),(0,0)):
-                p.write_text(json.dumps(dict(DEFAULTS,config_version=4,unknown_timeout_s=old)))
+            for old,expected in ((12,12),(30,30),(0,0)):
+                p.write_text(json.dumps(dict(DEFAULTS,config_version=9,unknown_timeout_s=old)))
                 self.assertEqual(load_config(p)["unknown_timeout_s"],expected)
         for bad in (-1,3601,float("nan"),True):
             with self.assertRaises(ValueError): validate_config(dict(DEFAULTS,unknown_timeout_s=bad))
@@ -142,7 +142,7 @@ class ArrivalTests(unittest.TestCase):
 
     def test_long_input_call_does_not_train_latency_or_keep_old_motion(self):
         class BlockedWindow(Window):
-            def tap_space(self,hwnd,hold,cancel,guard):
+            def click_at(self,hwnd,box,x,y,hold,cancel,guard,*,jitter_ratio=0):
                 if cancel() or not guard(): return False
                 self.last_send_begin=time.perf_counter()
                 self.last_send_end=self.last_send_begin+.2
@@ -163,18 +163,21 @@ class ArrivalTests(unittest.TestCase):
         from unittest.mock import patch
         from fisher.windows import Windows
         clock=[0.];calls=[]
-        win=Windows.__new__(Windows);win.owns_space=False
+        win=Windows.__new__(Windows);win.owns_mouse=False
         win.foreground_matches=lambda hwnd:True
         win.key_down=lambda key:False
-        def send(up=False):
-            calls.append(up)
-            if not up: clock[0]+=.2
-        win._send=send
+        win.virtual_screen=lambda:(0,0,1920,1080)
+        class User32:
+            def SendInput(self,n,ptr,size):
+                calls.append(n)
+                if n == 2: clock[0]+=.2
+                return n
+        win.u=User32()
         with patch("fisher.windows.time.perf_counter",side_effect=lambda:clock[0]), \
              patch("fisher.windows.time.sleep",side_effect=AssertionError("不应延长阻塞后的按住时间")):
-            self.assertTrue(win.tap_space(1,35,lambda:False))
-        self.assertEqual(calls,[False,True])
-        self.assertFalse(win.owns_space)
+            self.assertTrue(win.click_at(1,dict(left=0,top=0,width=336,height=598),.5,.5,35,lambda:False))
+        self.assertEqual(calls,[2,1])
+        self.assertFalse(win.owns_mouse)
 
 
 if __name__=="__main__": unittest.main()

@@ -113,7 +113,7 @@ class ClickGuardTests(unittest.TestCase):
         win.key_down = lambda key: key in pressed
         win.virtual_screen = lambda: (0, 0, 1920, 1080)
         win.u = self.User32()
-        win.owns_space = False
+        win.owns_mouse = False
         win.interrupted = False
         return win
 
@@ -133,7 +133,7 @@ class ClickGuardTests(unittest.TestCase):
         win = self.instance()
         self.assertTrue(win.click_at(1, self.BOX, .5, .5, 10, lambda: False))
         self.assertEqual(win.u.calls, [2, 1])
-        self.assertFalse(win.owns_space)
+        self.assertFalse(win.owns_mouse)
         self.assertFalse(win.interrupted)
         self.assertIsNotNone(win.last_key_down_at)
         self.assertIsNotNone(win.last_key_up_at)
@@ -200,6 +200,25 @@ class ClickGuardTests(unittest.TestCase):
         # 第一次发送（移动+按下）被尝试一次；失败后不再补发抬起。
         self.assertEqual(win.u.calls, [2])
         self.assertIsNone(win.last_key_down_at)
+
+    def test_failed_mouse_release_can_be_retried_without_new_down(self):
+        win = self.instance()
+        attempts = []
+        def send(n, ptr, size):
+            attempts.append(n)
+            return 0 if len(attempts) == 2 else n
+        win.u.SendInput = send
+        with self.assertRaises(OSError):
+            win.click_at(1, self.BOX, .5, .5, 0, lambda: False)
+        self.assertTrue(win.owns_mouse)
+        win.release()
+        self.assertEqual(attempts, [2, 1, 1])
+        self.assertFalse(win.owns_mouse)
+
+    def test_unowned_manual_mouse_button_is_not_released(self):
+        win = self.instance()
+        win.release()
+        self.assertEqual(win.u.calls, [])
 
 
 if __name__ == "__main__":

@@ -95,13 +95,24 @@ class PhaseTests(unittest.TestCase):
         self.assertLess(d["send_at"],t+2/.606)
 
     def test_next_round_keeps_phase_and_accepts_new_target(self):
-        m=PhaseModel(DEFAULTS,DeliveryLatency(40),SpeedCalibration())
+        m=PhaseModel(dict(DEFAULTS,min_action_interval_s=.24),DeliveryLatency(40),SpeedCalibration())
         m.step(observation(175),0,0);m.commit(0)
         p=m.clock.phase_at(.5)
         d=m.step(observation(175+184*.606*.5,(225,235)),.5,.52)
         self.assertAlmostEqual(m.clock.phase_at(.5),p)
         self.assertEqual(d["action"],"HIT")
         self.assertEqual(m.round_id,2)
+
+    def test_wechat_default_cooldown_still_applies_when_target_changes(self):
+        m=PhaseModel(DEFAULTS,DeliveryLatency(40),SpeedCalibration())
+        m.step(observation(175),0,0);m.commit(0)
+        phase=m.clock.phase_at(.5)
+        d=m.step(observation(175+184*.606*.5,(225,235)),.5,.52)
+        self.assertEqual(m.round_id,2)
+        self.assertAlmostEqual(m.clock.phase_at(.5),phase)
+        self.assertIsNone(d.get("action"))
+        x=79+184*m.clock.position_at(1)
+        self.assertEqual(m.step(observation(x,(225,235)),1,1.02).get("action"),"HIT")
 
     def test_occlusion_keeps_full_known_target(self):
         m=PhaseModel(DEFAULTS,DeliveryLatency(40),SpeedCalibration())
@@ -112,10 +123,10 @@ class PhaseTests(unittest.TestCase):
         obs=observation(175);obs.target=None
         self.assertEqual(m.step(obs,1,1.02)["action"],"HIT")
 
-    def test_migration_enables_phase_preserving_custom_choices(self):
+    def test_wechat_migration_preserves_phase_and_custom_choices(self):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp)/"config.json"
-            old=dict(DEFAULTS,config_version=5,timing_mode="contact",capture_every_n_frames=6,
+            old=dict(DEFAULTS,config_version=9,emulator_type="wechat",timing_mode="phase",capture_every_n_frames=6,
                      unknown_timeout_s=240,continuous_fishing=True,toggle_hotkey="F6")
             p.write_text(json.dumps(old))
             new=load_config(p)
@@ -142,22 +153,21 @@ class SimulatedRuntime:
     """完整Runtime循环：虚拟时间、真实状态机，输入回执只供断言。"""
     def __init__(self, *, targets=((170,172),), start=.25, duration=7,
                  pause_at=None, focus_at=None, unknown_at=None, resize_at=None, escape_at=None,
-                 dry=False, calibrate=False, capture_frames=30, click=False):
+                 dry=False, calibrate=False, capture_frames=30):
         self.t=.001;self.duration=duration;self.pause_at=pause_at;self.focus_at=focus_at
         self.escape_at=escape_at
         self.unknown_at=unknown_at;self.resize_at=resize_at
         self.grabs=[];self.hits=[];self.targets=targets;self.index=0;self.effects=[];self.jitter_values=[]
         self.truth=PhaseClock(.606);self.truth.observe(0,start)
         self.cfg=dict(DEFAULTS,continuous_fishing=True,dry_run=dry,calibrate_speed=calibrate,
-                      capture_every_n_frames=capture_frames,
-                      input_method=("click" if click else "space"))
+                      capture_every_n_frames=capture_frames)
         sim=self
         class Stop:
             def is_set(self):return sim.t>=sim.duration
             def wait(self,seconds):sim.t+=max(.000001,seconds)
             def set(self):sim.t=sim.duration
         class Window:
-            interrupted=False;owns_space=False
+            interrupted=False;owns_mouse=False
             last_key_down_at=None;last_send_begin=None;last_send_end=None
             def client_box(self,hwnd):
                 w=337 if sim.resize_at is not None and sim.t>=sim.resize_at else 336
@@ -167,10 +177,6 @@ class SimulatedRuntime:
                 return ((key==hotkey_vk("F9") and sim.pause_at is not None and sim.t>=sim.pause_at)
                         or (key==0x1B and sim.escape_at is not None and sim.t>=sim.escape_at))
             def release(self):pass
-            def tap_space(self,hwnd,hold,cancel,guard):
-                if cancel() or not guard():return False
-                return self._press(hold)
-
             def click_at(self,hwnd,box,x_norm,y_norm,hold,cancel,guard,*,jitter_ratio=0):
                 if cancel() or not guard():return False
                 sim.jitter_values.append(jitter_ratio)
@@ -239,8 +245,8 @@ class PhaseRuntimeTests(unittest.TestCase):
         self.assertTrue(all(b-a>=.1-1e-8 for a,b in zip(s.grabs,s.grabs[1:])))
         self.assertFalse(s.files)
 
-    def test_click_input_uses_same_schedule_and_latency_learning_as_space(self):
-        s = SimulatedRuntime(start=.25, targets=((170,172),), click=True).run()
+    def test_click_input_preserves_deadlines_and_passes_jitter_setting(self):
+        s = SimulatedRuntime(start=.25, targets=((170,172),)).run()
         self.assertEqual(len(s.hits), 1)
         self.assertTrue(s.hits[0][3], s.hits)
         self.assertEqual(s.jitter_values, [s.cfg["click_jitter_ratio"]])

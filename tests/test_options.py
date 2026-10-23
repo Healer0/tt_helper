@@ -18,25 +18,6 @@ DEFAULTS = dict(DEFAULTS, timing_mode="center", capture_every_n_frames=6)
 
 
 class OptionsTests(unittest.TestCase):
-    def test_old_config_keeps_profile_and_migrates_sampling_and_retries(self):
-        old = {"dry_run": False, "capture_fps": 60, "result_wait_s": 3.5,
-               "result_retry_s": 2, "result_max_presses": 3, "max_casts": 3,
-               "input_latency_ms": 65,
-               "profile": {"title": "雷电", "client_size": [557,994], "crop": [0,0,557,994]}}
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp)/"config.json"
-            path.write_text(json.dumps(old), encoding="utf-8")
-            cfg = load_config(path)
-            self.assertEqual(json.loads(path.read_text()), old)
-        self.assertEqual(cfg["profile"], old["profile"])
-        self.assertEqual(cfg["max_casts"], 3)
-        self.assertEqual(cfg["input_latency_ms"], 65)
-        self.assertEqual(cfg["capture_every_n_frames"], 6)
-        self.assertEqual(cfg["result_wait_s"], 3)
-        self.assertEqual(cfg["result_retry_s"], 1)
-        self.assertNotIn("result_max_presses", cfg)
-        self.assertNotIn("capture_fps", cfg)
-
     def test_new_config_values_survive_reload(self):
         cfg = dict(DEFAULTS, continuous_fishing=True, capture_every_n_frames=12,
                    toggle_hotkey="F6", pause_hotkey="F7", result_wait_s=4)
@@ -223,14 +204,17 @@ class HotkeyTests(unittest.TestCase):
         r.stop.set()
         self.assertTrue(r.input_cancelled())
 
-    def test_old_f9_is_not_hidden_in_key_hold(self):
+    def test_old_f9_is_not_hidden_in_mouse_hold(self):
         from fisher.windows import Windows
+        from unittest.mock import Mock
         win = Windows.__new__(Windows)
         win.foreground_matches = lambda hwnd: True
         win.key_down = lambda key: key == hotkey_vk("F9")
-        win._send = lambda up=False: None
-        win.owns_space = False
-        self.assertTrue(win.tap_space(1, 10, lambda: False))
+        win.u = Mock()
+        win.u.SendInput.side_effect = lambda n, ptr, size: n
+        win.virtual_screen = lambda: (0,0,1920,1080)
+        win.owns_mouse = False
+        self.assertTrue(win.click_at(1,dict(left=0,top=0,width=336,height=598),.5,.5,10,lambda:False))
         self.assertFalse(win.interrupted)
 
 
@@ -253,7 +237,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
                 self.polls += 1
                 return ((key == hotkey_vk("F6") and .04 <= clock.t < .08) or
                         (key == hotkey_vk("F7") and .35 <= clock.t < .39))
-            def tap_space(self, *args): raise AssertionError("等待上钩时不应按空格")
+            def click_at(self, *args, **kwargs): raise AssertionError("等待上钩时不应点击")
             def release(self): pass
         grabs = []
         class Shot:
